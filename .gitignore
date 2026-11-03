@@ -1,0 +1,15 @@
+# Python virtual environment: rebuilt from requirements.txt, never committed
+.venv/
+
+# Python bytecode and caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Local environment files and runtime logs
+.env
+logs/
+*.log
