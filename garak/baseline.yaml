@@ -1,0 +1,20 @@
+# Phase 1 Garak baseline config (Garak 0.17.1).
+# Pins the settings that Garak would otherwise take from its own defaults, so the
+# baseline can be reproduced. Probes are chosen on the command line (--spec) and the
+# report name with --report_prefix, so one file serves every run.
+#
+# Usage (from the repo root, venv active):
+#   python -m garak --config garak/baseline.yaml \
+#     --spec probes.encoding.InjectBase64 --report_prefix phase1_encoding_base64_g1
+
+run:
+  generations: 1          # Garak's own default is 5; always set explicitly
+
+plugins:
+  target_type: ollama
+  target_name: qwen2.5:7b
+  generators:
+    ollama:
+      OllamaGeneratorChat:
+        temperature: 0    # Garak's default is None (Ollama's own default, not 0)
+        max_tokens: 150   # Garak's default, stated here so it is on record
