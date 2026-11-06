@@ -11,7 +11,7 @@ Measured results for `secure-triage-agent`, updated at the end of each phase. Ev
 
 A Garak hit does not mean the application was compromised.
 
-**Status:** Phase 1 in progress: all Garak runs are done and the numbers below are filled in. Sections for later phases are placeholders.
+**Status:** Phase 1 complete for v1 (2026-11-06), with limits stated below: the runs were not seeded, so the numbers cannot be reproduced exactly, and the stricter counts are one rater's classification. Sections for later phases are placeholders.
 
 ---
 

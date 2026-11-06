@@ -6,12 +6,12 @@ This is a **defensive security** project. I build a small vulnerability-triage a
 
 ## Status
 
-**Phase 0 (setup and foundations): complete. Phase 1 (Garak baseline): in progress; the runs and analysis are done and the write-up is being finished.** The assistant itself is not built yet.
+**Phase 0 (setup and foundations) and Phase 1 (Garak baseline): complete for v1, with the limits listed under "Phase 1 findings".** The assistant itself is not built yet.
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Setup, model choice, tool-calling checks | Done |
-| 1 | Garak baseline assessment | In progress (runs done; results in `RESULTS.md`) |
+| 1 | Garak baseline assessment | Done for v1 (results and limits in `RESULTS.md`) |
 | 2 | Agent, identity and threat model | Not started |
 | 3 | Adversary emulation harness | Not started |
 | 4 | Hardening | Not started |
