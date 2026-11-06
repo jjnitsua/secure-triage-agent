@@ -9,6 +9,9 @@
 
 run:
   generations: 1          # Garak's own default is 5; always set explicitly
+  seed: 0                 # Garak's default is None, which draws a different random subset of
+                          # prompts (the 256 cap) on every run. Added after the first Phase 1
+                          # runs, which were unseeded: their numbers cannot be repeated exactly.
 
 plugins:
   target_type: ollama
