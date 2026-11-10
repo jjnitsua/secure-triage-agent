@@ -12,8 +12,12 @@ here only. Tool error text reaches the model, so it must not carry useful detail
 
 Run (from the repo folder, with TRIAGE_SIGNING_KEY set):
   python -m mcp_server.server        # Streamable HTTP on 127.0.0.1:8000
+Port: TRIAGE_MCP_PORT (default 8000). The host is fixed to 127.0.0.1 on purpose: the SDK
+turns on its Host/Origin checks (DNS rebinding protection) automatically only for
+localhost hosts, so never bind another address without setting those checks explicitly.
 """
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -70,4 +74,4 @@ def create_server(db_path=None) -> MCPServer:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    create_server().run("streamable-http", host="127.0.0.1", port=8000)
+    create_server().run("streamable-http", host="127.0.0.1", port=int(os.environ.get("TRIAGE_MCP_PORT", "8000")))
