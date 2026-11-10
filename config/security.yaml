@@ -1,0 +1,15 @@
+# Security switches for the triage tool server (Phase 2).
+# Only the switches that are implemented so far are accepted; anything else is an error
+# (see app/config.py). The `mode: vulnerable | defended` shortcut and the other controls
+# from the plan arrive with the phases that build them.
+#
+# TRIAGE_CONFIG=/path/to/other.yaml points the server at a different file.
+
+auth:
+  token_auth: true     # identity comes from the verified token; false is only for the
+                       # separate identity experiment (not implemented yet, rejected)
+
+controls:
+  tool_authz: true     # false = vulnerable baseline: any logged-in user can read and
+                       # change any team's tickets; the model alone decides what is allowed
+  approval_policy: none   # none | naive | full (naive and full arrive in Phase 4)

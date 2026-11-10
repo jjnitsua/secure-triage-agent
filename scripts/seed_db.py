@@ -7,7 +7,7 @@ copies it to a working database before every run, so state never leaks between r
 
 Users and tokens are not stored in the database; the app reads data/users.json for
 authentication. The database holds tickets, each ticket's severity history, CVE records
-and the ticket-to-CVE links.
+the ticket-to-CVE links and an empty append-only event log (who changed what).
 (The approvals table is added when the approval flow is built.)
 
 Rerunning replaces data/fixtures.db. Standard library only.
@@ -63,6 +63,31 @@ CREATE TABLE ticket_cves (
     cve_id    TEXT NOT NULL REFERENCES cves(cve_id),
     PRIMARY KEY (ticket_id, cve_id)
 );
+
+-- Append-only log of what the tools actually did (who, which ticket, old and new value,
+-- the model-supplied reason as plain data). Starts empty. It is the evidence for what
+-- really happened to tickets, separate from what the model said.
+CREATE TABLE ticket_events (
+    event_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts            TEXT NOT NULL,
+    actor         TEXT NOT NULL,   -- user_id from the verified principal
+    action        TEXT NOT NULL CHECK (action IN ('update_severity','close_ticket','draft_summary')),
+    ticket_id     TEXT REFERENCES tickets(ticket_id),  -- NULL for draft_summary
+    old_value     TEXT,
+    new_value     TEXT,            -- for draft_summary: JSON list of ticket IDs
+    reason        TEXT,
+    version_after INTEGER
+);
+
+-- History and events can only grow: any UPDATE or DELETE is refused by the database.
+CREATE TRIGGER ticket_events_no_update BEFORE UPDATE ON ticket_events
+BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;
+CREATE TRIGGER ticket_events_no_delete BEFORE DELETE ON ticket_events
+BEGIN SELECT RAISE(ABORT, 'ticket_events is append-only'); END;
+CREATE TRIGGER ticket_severity_history_no_update BEFORE UPDATE ON ticket_severity_history
+BEGIN SELECT RAISE(ABORT, 'ticket_severity_history is append-only'); END;
+CREATE TRIGGER ticket_severity_history_no_delete BEFORE DELETE ON ticket_severity_history
+BEGIN SELECT RAISE(ABORT, 'ticket_severity_history is append-only'); END;
 """
 
 

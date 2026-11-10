@@ -40,3 +40,30 @@ def get_ticket(db_path, ticket_id: str) -> dict | None:
             "SELECT cve_id FROM ticket_cves WHERE ticket_id = ? ORDER BY cve_id",
             (ticket_id,))]
     return {**dict(row), "severity_history": history, "cve_ids": cve_ids}
+
+
+def list_tickets(db_path, status: str | None = None, team: str | None = None) -> list[dict]:
+    """Ticket summaries (no description text), optionally filtered by status and team."""
+    sql = "SELECT ticket_id, title, asset, team, severity, status FROM tickets"
+    clauses, params = [], []
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status)
+    if team is not None:
+        clauses.append("team = ?")
+        params.append(team)
+    if clauses:  # the clause text is fixed above; only the values come from callers
+        sql += " WHERE " + " AND ".join(clauses)
+    with closing(connect_readonly(db_path)) as con:
+        return [dict(r) for r in con.execute(sql + " ORDER BY ticket_id", params)]
+
+
+def get_cve(db_path, cve_id: str) -> dict | None:
+    """Return the CVE record as a dict, or None if there is no such record."""
+    with closing(connect_readonly(db_path)) as con:
+        row = con.execute(
+            "SELECT cve_id, title, description, cvss, severity, affected, published "
+            "FROM cves WHERE cve_id = ?",
+            (cve_id,),
+        ).fetchone()
+    return dict(row) if row else None

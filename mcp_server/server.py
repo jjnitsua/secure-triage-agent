@@ -1,9 +1,15 @@
-"""MCP tool server (Phase 2). Only `get_ticket` exists so far; the other five tools follow.
+"""MCP tool server (Phase 2). Tools so far: get_ticket, list_tickets, search_cve.
 
 Identity: every tool call must carry a signed principal in the request's `_meta` (see
 app/auth.py). The server verifies it on every call and takes the caller's team and role
 only from the verified result. The tools have no user, team or role parameter, so the
-model can neither see nor choose who is asking.
+model can neither see nor choose who is asking. Identity is checked in both security
+settings.
+
+Authorization (what a verified caller may see or do) is a separate switch,
+`controls.tool_authz` in config/security.yaml. On: analysts reach only their own team's
+tickets and the manager reaches all. Off: the vulnerable baseline, where any logged-in
+user can reach everything and the model alone decides what is allowed.
 
 Failures reach the caller as generic tool errors ("authentication failed",
 "ticket not found"). A ticket the caller may not read gets the same "ticket not found"
@@ -20,7 +26,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -28,6 +34,7 @@ from mcp.server.mcpserver import Context, MCPServer  # noqa: E402
 from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
 
 from app.auth import META_KEY, AuthError, Principal, verify_principal  # noqa: E402
+from app.config import load_config  # noqa: E402
 from mcp_server import store  # noqa: E402
 
 log = logging.getLogger("triage.mcp_server")
@@ -44,16 +51,19 @@ def require_principal(ctx: Context) -> Principal:
         raise ToolError("authentication failed") from None
 
 
-def can_read(principal: Principal, ticket: dict) -> bool:
-    """Team scoping for reads: analysts see their own team's tickets, the manager all."""
+def can_access_team(principal: Principal, team: str) -> bool:
+    """Team scoping: analysts reach their own team's tickets, the manager all of them."""
     if principal.role == "manager":
         return True
-    return principal.role == "analyst" and principal.team == ticket["team"]
+    return principal.role == "analyst" and principal.team == team
 
 
-def create_server(db_path=None) -> MCPServer:
+def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
     path = db_path or store.default_db_path()
     server = MCPServer("secure-triage-tools")
+
+    def may_access(principal: Principal, team: str) -> bool:
+        return True if not tool_authz else can_access_team(principal, team)
 
     @server.tool()
     async def get_ticket(ticket_id: str, ctx: Context) -> dict[str, Any]:
@@ -63,15 +73,48 @@ def create_server(db_path=None) -> MCPServer:
         if ticket is None:
             log.info("get_ticket user=%s ticket=%r outcome=not_found", principal.user_id, ticket_id)
             raise ToolError("ticket not found")
-        if not can_read(principal, ticket):
+        if not may_access(principal, ticket["team"]):
             log.warning("get_ticket user=%s ticket=%s outcome=forbidden", principal.user_id, ticket_id)
             raise ToolError("ticket not found")
         log.info("get_ticket user=%s ticket=%s outcome=ok", principal.user_id, ticket_id)
         return ticket
+
+    @server.tool()
+    async def list_tickets(
+        ctx: Context, status: Literal["open", "in_progress", "closed", "all"] = "all"
+    ) -> dict[str, Any]:
+        """List ticket summaries (ID, title, asset, team, severity, status), optionally by status."""
+        principal = require_principal(ctx)
+        team = None  # None = every team
+        if tool_authz:
+            if principal.role == "analyst" and principal.team:
+                team = principal.team
+            elif principal.role != "manager":
+                log.warning("list_tickets user=%s role=%r outcome=not_permitted", principal.user_id, principal.role)
+                raise ToolError("not permitted")
+        tickets = store.list_tickets(path, None if status == "all" else status, team)
+        log.info("list_tickets user=%s status=%s team_scope=%s count=%d",
+                 principal.user_id, status, team or "all", len(tickets))
+        return {"count": len(tickets), "tickets": tickets}
+
+    @server.tool()
+    async def search_cve(cve_id: str, ctx: Context) -> dict[str, Any]:
+        """Look up one CVE record by its ID (for example CVE-2099-0003)."""
+        principal = require_principal(ctx)
+        cve = store.get_cve(path, cve_id)
+        if cve is None:
+            log.info("search_cve user=%s cve=%r outcome=not_found", principal.user_id, cve_id)
+            raise ToolError("cve not found")
+        log.info("search_cve user=%s cve=%s outcome=ok", principal.user_id, cve_id)
+        return cve
 
     return server
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    create_server().run("streamable-http", host="127.0.0.1", port=int(os.environ.get("TRIAGE_MCP_PORT", "8000")))
+    config = load_config()
+    if not config.tool_authz:
+        log.warning("tool_authz is OFF: vulnerable baseline, any logged-in user can reach every team's tickets")
+    create_server(tool_authz=config.tool_authz).run(
+        "streamable-http", host="127.0.0.1", port=int(os.environ.get("TRIAGE_MCP_PORT", "8000")))
