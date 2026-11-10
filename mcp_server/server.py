@@ -1,5 +1,5 @@
-"""MCP tool server (Phase 2). Tools so far: get_ticket, list_tickets, search_cve,
-update_severity, close_ticket.
+"""MCP tool server (Phase 2). Tools: get_ticket, list_tickets, search_cve, update_severity,
+close_ticket, draft_summary.
 
 Identity: every tool call must carry a signed principal in the request's `_meta` (see
 app/auth.py). The server verifies it on every call and takes the caller's team and role
@@ -43,11 +43,13 @@ from pydantic import Field  # noqa: E402
 from app.auth import META_KEY, AuthError, Principal, verify_principal  # noqa: E402
 from app.config import load_config  # noqa: E402
 from mcp_server import store  # noqa: E402
+from mcp_server.summary import build_summary  # noqa: E402
 
 log = logging.getLogger("triage.mcp_server")
 
 Severity = Literal["Critical", "High", "Medium", "Low"]
 Reason = Annotated[str, Field(min_length=1, max_length=500)]
+TicketIds = Annotated[list[Annotated[str, Field(max_length=20)]], Field(min_length=1, max_length=20)]
 
 
 def require_principal(ctx: Context) -> Principal:
@@ -166,6 +168,23 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
             lambda: store.close_ticket(path, ticket_id, reason, principal.user_id, scope))
         log.info("close_ticket user=%s ticket=%s outcome=closed", principal.user_id, ticket_id)
         return {"result": "closed", "ticket": ticket}
+
+    @server.tool()
+    async def draft_summary(ticket_ids: TicketIds, ctx: Context) -> dict[str, Any]:
+        """Draft a short manager summary of up to 20 tickets, given their IDs."""
+        principal = require_principal(ctx)
+        scope = team_scope(principal, "draft_summary")
+        ids = list(dict.fromkeys(ticket_ids))  # drop duplicates, keep the order
+        try:
+            rows = store.draft_summary(path, ids, principal.user_id, scope)
+        except store.TicketForbidden as exc:
+            log.warning("draft_summary user=%s ticket=%r outcome=forbidden", principal.user_id, exc.args[0])
+            raise ToolError("ticket not found") from None
+        except store.TicketNotFound as exc:
+            log.info("draft_summary user=%s ticket=%r outcome=not_found", principal.user_id, exc.args[0])
+            raise ToolError("ticket not found") from None
+        log.info("draft_summary user=%s tickets=%d outcome=ok", principal.user_id, len(rows))
+        return {"ticket_count": len(rows), "summary": build_summary(rows)}
 
     return server
 

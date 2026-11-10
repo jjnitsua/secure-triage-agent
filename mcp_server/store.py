@@ -9,9 +9,10 @@ the severity changed, append the event-log row, then commit. Any failure rolls
 everything back. Every query is parameterized: values such as a ticket ID or a reason
 chosen by the model are never pasted into SQL text. Standard library only.
 """
+import json
 import os
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -112,6 +113,20 @@ def _record_event(con, actor, action, ticket_id, old_value, new_value, reason, v
     )
 
 
+@contextmanager
+def _transaction(db_path):
+    """One write transaction: BEGIN IMMEDIATE, commit if the block finishes, roll back on any error."""
+    with closing(connect_readwrite(db_path)) as con:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            yield con
+            con.execute("COMMIT")
+        except BaseException:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
+
+
 def _write(db_path, ticket_id, team_scope, change):
     """Run `change(con, row)` in one transaction after the shared checks.
 
@@ -119,26 +134,18 @@ def _write(db_path, ticket_id, team_scope, change):
     state is only ever revealed to a caller who may see the ticket. Returns
     (changed, ticket) where ticket is read inside the same transaction.
     """
-    with closing(connect_readwrite(db_path)) as con:
-        con.execute("BEGIN IMMEDIATE")
-        try:
-            row = con.execute(
-                "SELECT team, severity, status, version FROM tickets WHERE ticket_id = ?", (ticket_id,)
-            ).fetchone()
-            if row is None:
-                raise TicketNotFound(ticket_id)
-            if team_scope is not None and row["team"] != team_scope:
-                raise TicketForbidden(ticket_id)
-            if row["status"] == "closed":
-                raise TicketClosed(ticket_id)
-            changed = change(con, row)
-            ticket = _read_ticket(con, ticket_id)
-            con.execute("COMMIT")
-            return changed, ticket
-        except BaseException:
-            if con.in_transaction:
-                con.execute("ROLLBACK")
-            raise
+    with _transaction(db_path) as con:
+        row = con.execute(
+            "SELECT team, severity, status, version FROM tickets WHERE ticket_id = ?", (ticket_id,)
+        ).fetchone()
+        if row is None:
+            raise TicketNotFound(ticket_id)
+        if team_scope is not None and row["team"] != team_scope:
+            raise TicketForbidden(ticket_id)
+        if row["status"] == "closed":
+            raise TicketClosed(ticket_id)
+        changed = change(con, row)
+        return changed, _read_ticket(con, ticket_id)
 
 
 def update_severity(db_path, ticket_id, level, reason, actor, team_scope=None):
@@ -175,3 +182,25 @@ def close_ticket(db_path, ticket_id, reason, actor, team_scope=None):
         return True
 
     return _write(db_path, ticket_id, team_scope, change)
+
+
+def draft_summary(db_path, ticket_ids, actor, team_scope=None) -> list[dict]:
+    """Return the summary fields of every requested ticket and record a draft_summary event.
+
+    All or nothing: if any ID does not exist (TicketNotFound) or is outside the team scope
+    (TicketForbidden), nothing is returned and nothing is recorded. Closed tickets are
+    included. The rows carry no description text.
+    """
+    with _transaction(db_path) as con:
+        rows = []
+        for ticket_id in ticket_ids:
+            row = con.execute(
+                "SELECT ticket_id, title, asset, team, severity, status FROM tickets WHERE ticket_id = ?",
+                (ticket_id,)).fetchone()
+            if row is None:
+                raise TicketNotFound(ticket_id)
+            if team_scope is not None and row["team"] != team_scope:
+                raise TicketForbidden(ticket_id)
+            rows.append(dict(row))
+        _record_event(con, actor, "draft_summary", None, None, json.dumps(list(ticket_ids)), None, None)
+        return rows
