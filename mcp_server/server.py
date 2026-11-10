@@ -1,4 +1,5 @@
-"""MCP tool server (Phase 2). Tools so far: get_ticket, list_tickets, search_cve.
+"""MCP tool server (Phase 2). Tools so far: get_ticket, list_tickets, search_cve,
+update_severity, close_ticket.
 
 Identity: every tool call must carry a signed principal in the request's `_meta` (see
 app/auth.py). The server verifies it on every call and takes the caller's team and role
@@ -11,10 +12,15 @@ Authorization (what a verified caller may see or do) is a separate switch,
 tickets and the manager reaches all. Off: the vulnerable baseline, where any logged-in
 user can reach everything and the model alone decides what is allowed.
 
+There is no approval step yet (`approval_policy: none`): a verified, authorized caller's
+severity change or close runs immediately. Approvals are Phase 4.
+
 Failures reach the caller as generic tool errors ("authentication failed",
-"ticket not found"). A ticket the caller may not read gets the same "ticket not found"
+"ticket not found"). A ticket the caller may not reach gets the same "ticket not found"
 as one that does not exist, so ticket IDs cannot be probed. The real reason is logged
-here only. Tool error text reaches the model, so it must not carry useful detail.
+here only. Tool error text reaches the model, so it must not carry useful detail. The
+free-text `reason` of a write is model-supplied: it is stored as plain data in the event
+log and never interpreted or logged here.
 
 Run (from the repo folder, with TRIAGE_SIGNING_KEY set):
   python -m mcp_server.server        # Streamable HTTP on 127.0.0.1:8000
@@ -26,18 +32,22 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from mcp.server.mcpserver import Context, MCPServer  # noqa: E402
 from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402
+from pydantic import Field  # noqa: E402
 
 from app.auth import META_KEY, AuthError, Principal, verify_principal  # noqa: E402
 from app.config import load_config  # noqa: E402
 from mcp_server import store  # noqa: E402
 
 log = logging.getLogger("triage.mcp_server")
+
+Severity = Literal["Critical", "High", "Medium", "Low"]
+Reason = Annotated[str, Field(min_length=1, max_length=500)]
 
 
 def require_principal(ctx: Context) -> Principal:
@@ -65,6 +75,32 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
     def may_access(principal: Principal, team: str) -> bool:
         return True if not tool_authz else can_access_team(principal, team)
 
+    def team_scope(principal: Principal, tool: str) -> str | None:
+        """None = every team; a team name = only that team's tickets; raises for roles that may not use the tool."""
+        if not tool_authz or principal.role == "manager":
+            return None
+        if principal.role == "analyst" and principal.team:
+            return principal.team
+        log.warning("%s user=%s role=%r outcome=not_permitted", tool, principal.user_id, principal.role)
+        raise ToolError("not permitted")
+
+    def run_write(tool: str, principal: Principal, ticket_id: str, call):
+        """Run a store write and turn its failures into generic tool errors (real reason logged)."""
+        try:
+            return call()
+        except store.TicketForbidden:
+            log.warning("%s user=%s ticket=%s outcome=forbidden", tool, principal.user_id, ticket_id)
+            raise ToolError("ticket not found") from None
+        except store.TicketNotFound:
+            log.info("%s user=%s ticket=%r outcome=not_found", tool, principal.user_id, ticket_id)
+            raise ToolError("ticket not found") from None
+        except store.TicketClosed:
+            log.info("%s user=%s ticket=%s outcome=closed", tool, principal.user_id, ticket_id)
+            raise ToolError("ticket is closed") from None
+        except store.TicketConflict:
+            log.warning("%s user=%s ticket=%s outcome=conflict", tool, principal.user_id, ticket_id)
+            raise ToolError("ticket changed, try again") from None
+
     @server.tool()
     async def get_ticket(ticket_id: str, ctx: Context) -> dict[str, Any]:
         """Read one vulnerability ticket by its ID (for example T-1001)."""
@@ -85,13 +121,7 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
     ) -> dict[str, Any]:
         """List ticket summaries (ID, title, asset, team, severity, status), optionally by status."""
         principal = require_principal(ctx)
-        team = None  # None = every team
-        if tool_authz:
-            if principal.role == "analyst" and principal.team:
-                team = principal.team
-            elif principal.role != "manager":
-                log.warning("list_tickets user=%s role=%r outcome=not_permitted", principal.user_id, principal.role)
-                raise ToolError("not permitted")
+        team = team_scope(principal, "list_tickets")
         tickets = store.list_tickets(path, None if status == "all" else status, team)
         log.info("list_tickets user=%s status=%s team_scope=%s count=%d",
                  principal.user_id, status, team or "all", len(tickets))
@@ -107,6 +137,35 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
             raise ToolError("cve not found")
         log.info("search_cve user=%s cve=%s outcome=ok", principal.user_id, cve_id)
         return cve
+
+    @server.tool()
+    async def update_severity(ticket_id: str, level: Severity, reason: Reason, ctx: Context) -> dict[str, Any]:
+        """Change a ticket's severity to Critical, High, Medium or Low, giving a short reason."""
+        principal = require_principal(ctx)
+        scope = team_scope(principal, "update_severity")
+        reason = reason.strip()
+        if not reason:
+            raise ToolError("reason required")
+        changed, ticket = run_write(
+            "update_severity", principal, ticket_id,
+            lambda: store.update_severity(path, ticket_id, level, reason, principal.user_id, scope))
+        log.info("update_severity user=%s ticket=%s level=%s outcome=%s",
+                 principal.user_id, ticket_id, level, "updated" if changed else "unchanged")
+        return {"result": "updated" if changed else "unchanged", "ticket": ticket}
+
+    @server.tool()
+    async def close_ticket(ticket_id: str, reason: Reason, ctx: Context) -> dict[str, Any]:
+        """Close a ticket, giving a short reason."""
+        principal = require_principal(ctx)
+        scope = team_scope(principal, "close_ticket")
+        reason = reason.strip()
+        if not reason:
+            raise ToolError("reason required")
+        _, ticket = run_write(
+            "close_ticket", principal, ticket_id,
+            lambda: store.close_ticket(path, ticket_id, reason, principal.user_id, scope))
+        log.info("close_ticket user=%s ticket=%s outcome=closed", principal.user_id, ticket_id)
+        return {"result": "closed", "ticket": ticket}
 
     return server
 
