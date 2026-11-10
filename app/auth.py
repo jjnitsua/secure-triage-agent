@@ -1,4 +1,10 @@
-"""Signed principal: how the agent tells the MCP server who is calling (Phase 2).
+"""Authentication and the signed principal (Phase 2).
+
+Two parts. (1) Token lookup: `load_users()` reads data/users.json (dev-only fake tokens) and
+`TokenDirectory.authenticate()` turns a bearer token into a Principal, or None for any
+token it does not know. It compares the token against every known token in constant time
+and never prints tokens. This is the only place a user's identity is decided. (2) The signed
+principal, described next: how the agent tells the MCP server who is calling.
 
 The agent service decides who the user is (from the bearer token), then signs that
 identity and sends it with every tool call in the MCP request's `_meta`, never in the
@@ -26,6 +32,14 @@ import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+USERS_ENV = "TRIAGE_USERS"
+ROLES = ("analyst", "manager")
+USER_KEYS = {"user_id", "display_name", "team", "role", "token"}
+MIN_TOKEN_LENGTH = 8
+MAX_TOKEN_LENGTH = 256
 
 KEY_ENV = "TRIAGE_SIGNING_KEY"
 MIN_KEY_LENGTH = 16
@@ -110,3 +124,72 @@ def verify_principal(package: object, now: float | None = None) -> Principal:
     if (time.time() if now is None else now) >= exp:
         raise AuthError("expired principal")
     return Principal(user_id=user_id, team=team, role=role)
+
+
+class TokenDirectory:
+    """Maps bearer tokens to principals. Built by load_users(); its repr never shows tokens."""
+
+    def __init__(self, entries):
+        self._entries = tuple((token.encode("utf-8"), principal) for token, principal in entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __repr__(self) -> str:
+        return f"TokenDirectory({len(self._entries)} users)"
+
+    def authenticate(self, token: object) -> Principal | None:
+        """Return the Principal for a known token, else None.
+
+        The candidate is compared with every known token, with no early exit, so the time
+        taken does not reveal which token matched or how close a guess was.
+        """
+        if not isinstance(token, str) or not token or len(token) > MAX_TOKEN_LENGTH:
+            return None
+        candidate = token.encode("utf-8")
+        found = None
+        for known, principal in self._entries:
+            if hmac.compare_digest(known, candidate) and found is None:
+                found = principal
+        return found
+
+
+def load_users(path=None) -> TokenDirectory:
+    """Load and validate the users file (data/users.json, or TRIAGE_USERS if set).
+
+    Strict, like the config loader: unknown keys, wrong types, unknown roles, an analyst
+    without a team, a token that is too short or too long, and duplicate user IDs or
+    tokens all raise ValueError. Error messages name the user, never the token.
+    """
+    path = Path(path or os.environ.get(USERS_ENV) or ROOT / "data" / "users.json")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("users"), list) or not raw["users"]:
+        raise ValueError("users file must hold a non-empty 'users' list")
+    if set(raw) - {"_note", "users"}:
+        raise ValueError("unknown top-level key in users file")
+
+    entries, user_ids, tokens = [], set(), set()
+    for number, user in enumerate(raw["users"], start=1):
+        if not isinstance(user, dict):
+            raise ValueError(f"user #{number} must be an object")
+        if set(user) - USER_KEYS:
+            raise ValueError(f"user #{number} has unknown keys: {sorted(set(user) - USER_KEYS)}")
+        user_id, team, role, token = (user.get(k) for k in ("user_id", "team", "role", "token"))
+        if not (isinstance(user_id, str) and user_id):
+            raise ValueError(f"user #{number} needs a user_id")
+        if role not in ROLES:
+            raise ValueError(f"user {user_id!r} has an unknown role")
+        if not (team is None or (isinstance(team, str) and team)):
+            raise ValueError(f"user {user_id!r} has an invalid team")
+        if role == "analyst" and team is None:
+            raise ValueError(f"analyst {user_id!r} needs a team")
+        if not (isinstance(token, str) and MIN_TOKEN_LENGTH <= len(token) <= MAX_TOKEN_LENGTH):
+            raise ValueError(f"user {user_id!r} needs a token of {MIN_TOKEN_LENGTH} to {MAX_TOKEN_LENGTH} characters")
+        if user_id in user_ids:
+            raise ValueError(f"duplicate user_id {user_id!r}")
+        if token in tokens:
+            raise ValueError(f"user {user_id!r} has a token that another user already has")
+        user_ids.add(user_id)
+        tokens.add(token)
+        entries.append((token, Principal(user_id=user_id, team=team, role=role)))
+    return TokenDirectory(entries)
