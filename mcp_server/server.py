@@ -121,7 +121,7 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
     async def list_tickets(
         ctx: Context, status: Literal["open", "in_progress", "closed", "all"] = "all"
     ) -> dict[str, Any]:
-        """List ticket summaries (ID, title, asset, team, severity, status), optionally by status."""
+        """List ticket summaries (ID, title, asset, team, severity, status), optionally by status (default: all)."""
         principal = require_principal(ctx)
         team = team_scope(principal, "list_tickets")
         tickets = store.list_tickets(path, None if status == "all" else status, team)
@@ -142,7 +142,7 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
 
     @server.tool()
     async def update_severity(ticket_id: str, level: Severity, reason: Reason, ctx: Context) -> dict[str, Any]:
-        """Change a ticket's severity to Critical, High, Medium or Low, giving a short reason."""
+        """Change a ticket's severity to Critical, High, Medium or Low. A reason is required (1 to 500 characters)."""
         principal = require_principal(ctx)
         scope = team_scope(principal, "update_severity")
         reason = reason.strip()
@@ -157,7 +157,7 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
 
     @server.tool()
     async def close_ticket(ticket_id: str, reason: Reason, ctx: Context) -> dict[str, Any]:
-        """Close a ticket, giving a short reason."""
+        """Close a ticket. A reason is required (1 to 500 characters)."""
         principal = require_principal(ctx)
         scope = team_scope(principal, "close_ticket")
         reason = reason.strip()
@@ -171,7 +171,7 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
 
     @server.tool()
     async def draft_summary(ticket_ids: TicketIds, ctx: Context) -> dict[str, Any]:
-        """Draft a short manager summary of up to 20 tickets, given their IDs."""
+        """Draft a short manager summary of 1 to 20 tickets, given their IDs."""
         principal = require_principal(ctx)
         scope = team_scope(principal, "draft_summary")
         ids = list(dict.fromkeys(ticket_ids))  # drop duplicates, keep the order
