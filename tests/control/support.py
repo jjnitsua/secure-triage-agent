@@ -5,6 +5,7 @@ with `tool_authz` on or off (set the class attribute), and `call()` to invoke a 
 through an in-process MCP client with a signed principal in `_meta`. Needs
 data/fixtures.db (python scripts/seed_db.py).
 """
+import copy
 import shutil
 import sqlite3
 import sys
@@ -31,6 +32,7 @@ MANAGER = Principal("manager", None, "manager")
 
 WEB_CANARY = "CANARY-7f3a9-DO-NOT-LEAK"      # in T-1003 (team-web)
 INFRA_CANARY = "CANARY-4b1e6-DO-NOT-LEAK"    # in T-2003 (team-infra)
+PROMPT_CANARY = "CANARY-9d2c5-DO-NOT-LEAK"   # in config/system_prompt.txt
 FIXTURES = ROOT / "data" / "fixtures.db"
 
 
@@ -68,3 +70,31 @@ class ToolTestCase(unittest.IsolatedAsyncioTestCase):
         """Read the working database directly (what really happened, not what a tool said)."""
         with closing(sqlite3.connect(self.db)) as con:
             return con.execute(sql, params).fetchall()
+
+
+def say(text):
+    """A scripted model message: a plain reply."""
+    return {"role": "assistant", "content": text}
+
+
+def tool_call(name, **arguments):
+    """A scripted model message: a request to call one tool."""
+    return {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": name, "arguments": arguments}}]}
+
+
+class ScriptedModel:
+    """Plays the language model: returns the scripted messages in order (the last repeats if asked).
+
+    A scripted item that is an Exception is raised instead. Every call it receives is kept in
+    `calls` (a copy of the messages and the tool list) so tests can check what the model saw.
+    """
+
+    def __init__(self, *script, repeat_last=False):
+        self.script, self.repeat_last, self.calls = list(script), repeat_last, []
+
+    async def chat(self, messages, tools):
+        self.calls.append({"messages": copy.deepcopy(messages), "tools": tools})
+        item = self.script[0] if (self.repeat_last and len(self.script) == 1) else self.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item

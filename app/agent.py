@@ -21,10 +21,12 @@ with a scripted fake. OllamaModelClient is the real one. Messages are plain dict
 """
 import json
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import httpx
+import httpx2  # the MCP SDK's own HTTP library (a dependency of `mcp`), whose errors are not httpx errors
 import ollama
 from mcp import Client
 
@@ -43,6 +45,33 @@ class ModelUnavailable(Exception):
 
 class ToolServerUnavailable(Exception):
     """The MCP tool server could not be reached."""
+
+
+CONNECTION_ERRORS = (OSError, httpx.HTTPError, httpx2.HTTPError)
+
+
+def _only_connection_errors(exc: BaseException) -> bool:
+    """True if `exc`, or every error inside it when it is an exception group, is a connection-type failure.
+
+    The MCP client reports an unreachable server as an ExceptionGroup from its task group,
+    holding an httpx2 error (not an httpx error, not an OSError). A group that also holds
+    anything else, such as a programming error, does not count, so real bugs are not
+    disguised as an outage.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        return bool(exc.exceptions) and all(_only_connection_errors(inner) for inner in exc.exceptions)
+    return isinstance(exc, CONNECTION_ERRORS)
+
+
+@contextmanager
+def _tool_server_errors():
+    """Turn "the tool server cannot be reached" into ToolServerUnavailable; let everything else through."""
+    try:
+        yield
+    except Exception as exc:  # not BaseException: cancellation must pass through
+        if _only_connection_errors(exc):
+            raise ToolServerUnavailable from None
+        raise
 
 
 class ModelClient(Protocol):
@@ -106,11 +135,9 @@ class McpToolGateway:
 
     async def list_tools(self) -> list[dict]:
         """The server's own published tools, in the format the model expects."""
-        try:
+        with _tool_server_errors():
             async with Client(self._target) as client:
                 tools = (await client.list_tools()).tools
-        except (OSError, httpx.HTTPError):
-            raise ToolServerUnavailable from None
         return [{"type": "function",
                  "function": {"name": t.name, "description": t.description or "", "parameters": t.input_schema}}
                 for t in tools]
@@ -118,11 +145,9 @@ class McpToolGateway:
     async def call(self, principal: Principal, name: str, arguments: Mapping) -> ToolOutcome:
         """Call one tool as `principal`: the signed identity goes in `_meta`, the model's arguments as given."""
         meta = {META_KEY: sign_principal(principal)}
-        try:
+        with _tool_server_errors():
             async with Client(self._target) as client:
                 result = await client.call_tool(name, dict(arguments), meta=meta)
-        except (OSError, httpx.HTTPError):
-            raise ToolServerUnavailable from None
         return ToolOutcome(_result_text(result), result.is_error)
 
 

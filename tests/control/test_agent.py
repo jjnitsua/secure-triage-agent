@@ -6,7 +6,6 @@ loop and the dispatcher really do to tickets. Needs data/fixtures.db (python scr
 
 Run from the repo folder:  python tests/control/test_agent.py -v
 """
-import copy
 import json
 import sqlite3
 import unittest
@@ -14,36 +13,15 @@ from contextlib import closing
 from unittest import mock
 
 import httpx
+import httpx2
 import ollama
-from support import MANAGER, WEB, ToolTestCase
+from support import KEY, MANAGER, WEB, ScriptedModel, ToolTestCase, say, tool_call
 
 from app import agent
 from app.agent import (MAX_CALLS_PER_STEP, MAX_RESULT_CHARS, MAX_STEPS, McpToolGateway, ModelUnavailable,
-                       OllamaModelClient, run_agent)
+                       OllamaModelClient, ToolServerUnavailable, run_agent)
 
 SIX_TOOLS = {"get_ticket", "list_tickets", "search_cve", "update_severity", "close_ticket", "draft_summary"}
-
-
-def say(text):
-    return {"role": "assistant", "content": text}
-
-
-def tool_call(name, **arguments):
-    return {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": name, "arguments": arguments}}]}
-
-
-class ScriptedModel:
-    """Plays the model: returns the scripted messages in order (the last one repeats if asked)."""
-
-    def __init__(self, *script, repeat_last=False):
-        self.script, self.repeat_last, self.calls = list(script), repeat_last, []
-
-    async def chat(self, messages, tools):
-        self.calls.append({"messages": copy.deepcopy(messages), "tools": tools})
-        item = self.script[0] if (self.repeat_last and len(self.script) == 1) else self.script.pop(0)
-        if isinstance(item, Exception):
-            raise item
-        return item
 
 
 class AgentTestCase(ToolTestCase):
@@ -231,6 +209,67 @@ class AuthzOffTests(AgentTestCase):
         model = ScriptedModel(tool_call("get_ticket", ticket_id="T-2005"), say("ok"))
         result = await self.run_as(model, WEB)
         self.assertTrue(result.tool_calls[0].ok)
+
+
+class ConnectionClassificationTests(unittest.TestCase):
+    """Which errors count as "the tool server is unreachable". The MCP SDK uses httpx2, not httpx,
+    and reports a refused connection as an ExceptionGroup, so both have to be recognised."""
+
+    def test_connection_type_errors_count_alone_or_in_groups(self):
+        counted = {
+            "OSError": OSError("down"),
+            "ConnectionRefusedError": ConnectionRefusedError("refused"),
+            "httpx2 ConnectError": httpx2.ConnectError("All connection attempts failed"),
+            "httpx2 ReadTimeout": httpx2.ReadTimeout("slow"),
+            "httpx ConnectError": httpx.ConnectError("refused"),
+            "group of one": ExceptionGroup("g", [httpx2.ConnectError("x")]),
+            "nested groups": ExceptionGroup("g", [ExceptionGroup("h", [OSError("y"), httpx.ReadTimeout("z")])]),
+        }
+        for name, exc in counted.items():
+            with self.subTest(error=name):
+                self.assertTrue(agent._only_connection_errors(exc))
+
+    def test_anything_else_does_not_count_so_real_bugs_are_not_hidden(self):
+        not_counted = {
+            "ValueError": ValueError("bug"),
+            "RuntimeError": RuntimeError("bug"),
+            "KeyError": KeyError("k"),
+            "group of a bug": ExceptionGroup("g", [ValueError("bug")]),
+            "group mixing a bug with an outage": ExceptionGroup("g", [httpx2.ConnectError("x"), ValueError("bug")]),
+            "nested group mixing a bug": ExceptionGroup("g", [ExceptionGroup("h", [OSError("y"), KeyError("k")])]),
+        }
+        for name, exc in not_counted.items():
+            with self.subTest(error=name):
+                self.assertFalse(agent._only_connection_errors(exc))
+
+
+class ToolServerOutageTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        patcher = mock.patch.dict("os.environ", {"TRIAGE_SIGNING_KEY": KEY})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.dead = McpToolGateway("http://127.0.0.1:1/mcp")  # nothing listens on port 1
+
+    async def test_listing_tools_on_a_dead_server_is_an_outage(self):
+        with self.assertRaises(ToolServerUnavailable):
+            await self.dead.list_tools()
+
+    async def test_calling_a_tool_on_a_dead_server_is_an_outage(self):
+        with self.assertRaises(ToolServerUnavailable):
+            await self.dead.call(WEB, "get_ticket", {"ticket_id": "T-1005"})
+
+    async def test_the_loop_stops_before_the_model_is_asked_anything(self):
+        model = ScriptedModel(say("should not be reached"))
+        with self.assertRaises(ToolServerUnavailable):
+            await run_agent(model, self.dead, WEB, "hi", "SYSTEM PROMPT")
+        self.assertEqual(model.calls, [])
+
+    async def test_a_real_bug_is_not_disguised_as_an_outage(self):
+        with mock.patch.object(agent, "Client", side_effect=ValueError("bug")):
+            with self.assertRaises(ValueError):
+                await self.dead.call(WEB, "get_ticket", {"ticket_id": "T-1005"})
+            with self.assertRaises(ValueError):
+                await self.dead.list_tools()
 
 
 class FakeOllamaClient:
