@@ -13,3 +13,11 @@ __pycache__/
 .env
 logs/
 *.log
+
+# Generated databases (rebuild with scripts/seed_db.py and scripts/reset_db.py)
+data/fixtures.db
+data/working.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+data/*.tmp

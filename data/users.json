@@ -1,0 +1,26 @@
+{
+  "_note": "SYNTHETIC DEV-ONLY FIXTURE. These tokens are fake and only work against the local test app. Not real credentials.",
+  "users": [
+    {
+      "user_id": "analyst-web",
+      "display_name": "Web Team Analyst (fake)",
+      "team": "team-web",
+      "role": "analyst",
+      "token": "dev-token-analyst-web"
+    },
+    {
+      "user_id": "analyst-infra",
+      "display_name": "Infra Team Analyst (fake)",
+      "team": "team-infra",
+      "role": "analyst",
+      "token": "dev-token-analyst-infra"
+    },
+    {
+      "user_id": "manager",
+      "display_name": "Security Manager (fake)",
+      "team": null,
+      "role": "manager",
+      "token": "dev-token-manager"
+    }
+  ]
+}
