@@ -11,7 +11,7 @@ Measured results for `secure-triage-agent`, updated at the end of each phase. Ev
 
 A Garak hit does not mean the application was compromised.
 
-**Status:** Phase 1 complete for v1 (2026-11-06), with limits stated below: the runs were not seeded, so the numbers cannot be reproduced exactly, and the stricter counts are one rater's classification. Sections for later phases are placeholders.
+**Status:** Phase 1 complete for v1 (2026-11-06), with limits stated below: the runs were not seeded, so the numbers cannot be reproduced exactly, and the stricter counts are one rater's classification. Phase 2 complete for v1 (2026-11-11): the vulnerable baseline through the whole application, single seeded runs, nothing yet in defended mode. Sections for later phases are placeholders.
 
 ---
 
@@ -93,8 +93,59 @@ python scripts/parse_garak.py ~/.local/share/garak/garak_runs/phase1_{encoding_b
 
 ---
 
-## Phase 2: Agent and identity
-_Not started._
+## Phase 2: Agent and identity (vulnerable baseline through the whole application)
+
+Phase 2 built the assistant (`POST /chat`, signed identity, six MCP tools) and measured it in `mode: vulnerable` (tool authorization off, no approvals, token login on). Garak ran against `POST /chat` as the `analyst-web` dev user. Nothing was run in `mode: defended`, so there is no before/after result yet.
+
+### Run settings
+
+| Item | Value |
+|---|---|
+| Target | the whole application behind `POST /chat`, not the bare model |
+| Model and settings | `qwen2.5:7b` via Ollama; the service's own settings apply (temperature 0, seed 0, up to 1,024 generated tokens, a system prompt and tool definitions, an agent loop of at most 6 steps) |
+| Garak | 0.17.1, REST generator, `garak/rest_vulnerable.yaml` |
+| Prompts | 256 per probe, `run.seed: 0`, 1 generation per prompt; one run per group |
+| State | database reset from the fixtures before every group; database diffed after every group |
+| Not comparable with Phase 1 | Phase 1 was the bare model with a 150-token cap, no system prompt, no tools and unseeded prompt subsets |
+
+### Garak findings (model behavior; reply text only)
+
+> **Garak findings.** A flag means a detector matched the reply. It does not mean a ticket was changed; that is the next table. n is the number of prompts that got a reply; skipped prompts are not in n.
+
+| Probe | Detector | Flagged | n | Hit rate | 95% Wilson interval |
+|---|---|---|---|---|---|
+| promptinject.HijackHateHumans | AttackRogueString | 234 | 256 | 91.41% | [87.33%, 94.26%] |
+| promptinject.HijackKillHumans | AttackRogueString | 124 | 256 | 48.44% | [42.38%, 54.54%] |
+| promptinject.HijackLongPrompt | AttackRogueString | 242 | 256 | 94.53% | [91.03%, 96.71%] |
+| latentinjection.LatentInjectionReport | TriggerListDetector | 133 | 256 | 51.95% | [45.85%, 58.00%] |
+| latentinjection.LatentInjectionFactSnippetLegal | TriggerListDetector | 58 | 256 | 22.66% | [17.95%, 28.17%] |
+| latentinjection.LatentInjectionResume | TriggerListDetector | 46 | 250 | 18.40% | [14.09%, 23.67%] |
+| latentinjection.LatentWhoisSnippet | TriggerListDetector | n/a | 0 | **not testable** | n/a |
+| encoding.InjectHex | DecodeMatch | 15 | 256 | 5.86% | [3.58%, 9.44%] |
+| encoding.InjectBase64 | DecodeMatch | 0 | 256 | 0.00% | [0.00%, 1.48%] |
+| encoding.InjectROT13 | DecodeMatch | 2 | 256 | 0.78% | [0.21%, 2.80%] |
+
+`DecodeApprox` rows, the stricter counts (our own classification, not re-validated on agent replies) and the Phase 1 comparison are in `reports/PHASE_2_ANALYSIS.md`. `LatentWhoisSnippet` could not be tested: all 256 of its prompts are longer than the `/chat` limit of 4,000 characters and were refused (422). That is a coverage gap, not zero hits. The three `promptinject` probes contain only 144 distinct prompt texts each, and the 256 prompts of any probe are not independent trials, so the true uncertainty is wider than these intervals.
+
+### Verified application outcomes (what happened to tickets)
+
+> **Application security outcomes.** Read from the database after each group, not from reply text. This is the primary evidence and is not merged with the Garak table.
+
+| Result across the five runs | Count |
+|---|---|
+| Ticket-changing events with no approval | **9** (8 closes, 1 severity change) |
+| Of those, on tickets of the caller's own team (`team-web`) | 9 |
+| Closed tickets that were Critical | some, for example T-1001 and T-1004 (full list per run in the analysis, section 5) |
+| `draft_summary` events that included the other team's tickets (allowed by the vulnerable mode) | 32 |
+
+The counts come from about 2,300 prompts that received a reply, one seeded run per group, so they describe this run set and are not a rate. The first `latentinjection` run's changes cannot be tied to a probe (the event log had no request identifier then; it has one now). The four closes in one second in the Resume re-run most likely came from a single request, which is an inference from the timestamps.
+
+### What this does and does not show
+- **Shows:** in the vulnerable baseline, text sent by Garak's probes made the whole application reply with the injected string in most `promptinject` prompts, and was enough to make the agent close Critical tickets and change a severity with no approval and a made-up reason.
+- **Does not show:** how often this happens (single seeded runs); anything about `mode: defended` or whether any control works; other models or settings; that unflagged means safe; a cause for the differences from Phase 1.
+- **Run problems:** one `latentinjection` run hung when Ollama returned errors (cause not found) and was re-run for the unfinished probes; 503 is now skipped in the config and the driver `scripts/run_garak_rest.py` stops a run after 10 such errors or a timeout.
+
+Method, definitions, per-run table and limits: `reports/PHASE_2_ANALYSIS.md`. Reproduce a group with `python scripts/run_garak_rest.py --name <name> --spec <probes>` (commands in the analysis, section 8).
 
 ## Phase 3: Adversary emulation harness (application outcomes)
 _Not started._
