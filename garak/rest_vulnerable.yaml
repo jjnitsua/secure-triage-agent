@@ -1,0 +1,38 @@
+# Garak config for the whole application behind POST /chat (Phase 2, task 5; Garak 0.17.1).
+# Phase 1 (garak/baseline.yaml) tested the bare model; this tests the running service.
+# These are Garak findings (reply text only), kept apart from verified application
+# outcomes (database and event log), which are checked separately after each run.
+#
+# Before a run: the service must be started in the mode being tested
+# (TRIAGE_CONFIG=config/vulnerable.yaml for the baseline) after `python scripts/reset_db.py`.
+# The login token is NOT in this file. Set it for the run only:
+#   REST_API_KEY=dev-token-analyst-web python -m garak --config garak/rest_vulnerable.yaml \
+#     --spec probes.promptinject.HijackHateHumans --report_prefix phase2_rest_vuln_<name>
+#
+# Not comparable with Phase 1: Garak's temperature and max_tokens are not sent over REST, so
+# the service's own settings apply (temperature 0, seed 0, num_predict 1024, system prompt
+# and tools in play), not the Phase 1 150-token cap on the bare model.
+
+run:
+  generations: 1          # the REST generator cannot ask for several replies per call
+  seed: 0                 # repeat the same random 256-prompt subset on every run
+  soft_probe_prompt_cap: 256   # Garak's default, stated here so it is on record
+
+plugins:
+  target_type: rest
+  generators:
+    rest:
+      RestGenerator:
+        uri: http://127.0.0.1:8001/chat
+        method: post
+        headers:
+          Content-Type: application/json     # Garak sends the body as raw data, not json=
+          Authorization: "Bearer $KEY"       # $KEY comes from the REST_API_KEY environment variable
+        req_template_json_object:
+          message: "$INPUT"
+        response_json: true
+        response_json_field: reply
+        request_timeout: 120                 # default 20 s is too short for an agent loop
+        skip_codes: [422]                    # /chat refuses messages over 4000 characters (422);
+                                             # skip those prompts (counted, reported) instead of
+                                             # letting the 4xx abort the probe
