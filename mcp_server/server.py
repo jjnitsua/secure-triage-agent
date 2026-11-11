@@ -83,7 +83,7 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
             return None
         if principal.role == "analyst" and principal.team:
             return principal.team
-        log.warning("%s user=%s role=%r outcome=not_permitted", tool, principal.user_id, principal.role)
+        log.warning("%s user=%s request=%s role=%r outcome=not_permitted", tool, principal.user_id, principal.request_id, principal.role)
         raise ToolError("not permitted")
 
     def run_write(tool: str, principal: Principal, ticket_id: str, call):
@@ -91,16 +91,16 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
         try:
             return call()
         except store.TicketForbidden:
-            log.warning("%s user=%s ticket=%s outcome=forbidden", tool, principal.user_id, ticket_id)
+            log.warning("%s user=%s request=%s ticket=%s outcome=forbidden", tool, principal.user_id, principal.request_id, ticket_id)
             raise ToolError("ticket not found") from None
         except store.TicketNotFound:
-            log.info("%s user=%s ticket=%r outcome=not_found", tool, principal.user_id, ticket_id)
+            log.info("%s user=%s request=%s ticket=%r outcome=not_found", tool, principal.user_id, principal.request_id, ticket_id)
             raise ToolError("ticket not found") from None
         except store.TicketClosed:
-            log.info("%s user=%s ticket=%s outcome=closed", tool, principal.user_id, ticket_id)
+            log.info("%s user=%s request=%s ticket=%s outcome=already_closed", tool, principal.user_id, principal.request_id, ticket_id)
             raise ToolError("ticket is closed") from None
         except store.TicketConflict:
-            log.warning("%s user=%s ticket=%s outcome=conflict", tool, principal.user_id, ticket_id)
+            log.warning("%s user=%s request=%s ticket=%s outcome=conflict", tool, principal.user_id, principal.request_id, ticket_id)
             raise ToolError("ticket changed, try again") from None
 
     @server.tool()
@@ -109,12 +109,12 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
         principal = require_principal(ctx)
         ticket = store.get_ticket(path, ticket_id)
         if ticket is None:
-            log.info("get_ticket user=%s ticket=%r outcome=not_found", principal.user_id, ticket_id)
+            log.info("get_ticket user=%s request=%s ticket=%r outcome=not_found", principal.user_id, principal.request_id, ticket_id)
             raise ToolError("ticket not found")
         if not may_access(principal, ticket["team"]):
-            log.warning("get_ticket user=%s ticket=%s outcome=forbidden", principal.user_id, ticket_id)
+            log.warning("get_ticket user=%s request=%s ticket=%s outcome=forbidden", principal.user_id, principal.request_id, ticket_id)
             raise ToolError("ticket not found")
-        log.info("get_ticket user=%s ticket=%s outcome=ok", principal.user_id, ticket_id)
+        log.info("get_ticket user=%s request=%s ticket=%s outcome=ok", principal.user_id, principal.request_id, ticket_id)
         return ticket
 
     @server.tool()
@@ -125,8 +125,8 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
         principal = require_principal(ctx)
         team = team_scope(principal, "list_tickets")
         tickets = store.list_tickets(path, None if status == "all" else status, team)
-        log.info("list_tickets user=%s status=%s team_scope=%s count=%d",
-                 principal.user_id, status, team or "all", len(tickets))
+        log.info("list_tickets user=%s request=%s status=%s team_scope=%s count=%d",
+                 principal.user_id, principal.request_id, status, team or "all", len(tickets))
         return {"count": len(tickets), "tickets": tickets}
 
     @server.tool()
@@ -135,9 +135,9 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
         principal = require_principal(ctx)
         cve = store.get_cve(path, cve_id)
         if cve is None:
-            log.info("search_cve user=%s cve=%r outcome=not_found", principal.user_id, cve_id)
+            log.info("search_cve user=%s request=%s cve=%r outcome=not_found", principal.user_id, principal.request_id, cve_id)
             raise ToolError("cve not found")
-        log.info("search_cve user=%s cve=%s outcome=ok", principal.user_id, cve_id)
+        log.info("search_cve user=%s request=%s cve=%s outcome=ok", principal.user_id, principal.request_id, cve_id)
         return cve
 
     @server.tool()
@@ -150,9 +150,9 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
             raise ToolError("reason required")
         changed, ticket = run_write(
             "update_severity", principal, ticket_id,
-            lambda: store.update_severity(path, ticket_id, level, reason, principal.user_id, scope))
-        log.info("update_severity user=%s ticket=%s level=%s outcome=%s",
-                 principal.user_id, ticket_id, level, "updated" if changed else "unchanged")
+            lambda: store.update_severity(path, ticket_id, level, reason, principal.user_id, scope, principal.request_id))
+        log.info("update_severity user=%s request=%s ticket=%s level=%s outcome=%s",
+                 principal.user_id, principal.request_id, ticket_id, level, "updated" if changed else "unchanged")
         return {"result": "updated" if changed else "unchanged", "ticket": ticket}
 
     @server.tool()
@@ -165,8 +165,8 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
             raise ToolError("reason required")
         _, ticket = run_write(
             "close_ticket", principal, ticket_id,
-            lambda: store.close_ticket(path, ticket_id, reason, principal.user_id, scope))
-        log.info("close_ticket user=%s ticket=%s outcome=closed", principal.user_id, ticket_id)
+            lambda: store.close_ticket(path, ticket_id, reason, principal.user_id, scope, principal.request_id))
+        log.info("close_ticket user=%s request=%s ticket=%s outcome=closed", principal.user_id, principal.request_id, ticket_id)
         return {"result": "closed", "ticket": ticket}
 
     @server.tool()
@@ -176,14 +176,14 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
         scope = team_scope(principal, "draft_summary")
         ids = list(dict.fromkeys(ticket_ids))  # drop duplicates, keep the order
         try:
-            rows = store.draft_summary(path, ids, principal.user_id, scope)
+            rows = store.draft_summary(path, ids, principal.user_id, scope, principal.request_id)
         except store.TicketForbidden as exc:
-            log.warning("draft_summary user=%s ticket=%r outcome=forbidden", principal.user_id, exc.args[0])
+            log.warning("draft_summary user=%s request=%s ticket=%r outcome=forbidden", principal.user_id, principal.request_id, exc.args[0])
             raise ToolError("ticket not found") from None
         except store.TicketNotFound as exc:
-            log.info("draft_summary user=%s ticket=%r outcome=not_found", principal.user_id, exc.args[0])
+            log.info("draft_summary user=%s request=%s ticket=%r outcome=not_found", principal.user_id, principal.request_id, exc.args[0])
             raise ToolError("ticket not found") from None
-        log.info("draft_summary user=%s tickets=%d outcome=ok", principal.user_id, len(rows))
+        log.info("draft_summary user=%s request=%s tickets=%d outcome=ok", principal.user_id, principal.request_id, len(rows))
         return {"ticket_count": len(rows), "summary": build_summary(rows)}
 
     return server

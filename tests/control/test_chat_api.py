@@ -75,6 +75,45 @@ class ChatTests(ApiTestCase):
         self.assertEqual(len(response.json()["tool_calls"]), MAX_STEPS)
 
 
+class RequestIdTests(ApiTestCase):
+    HEX16 = r"[0-9a-f]{16}"
+
+    async def test_each_call_gets_its_own_id_and_the_events_carry_it(self):
+        ids = []
+        for level in ("Medium", "Low"):
+            model = ScriptedModel(tool_call("update_severity", ticket_id="T-1005", level=level, reason="asked"), say("ok"))
+            async with self.make_client(model) as client:
+                response = await client.post("/chat", json={"message": "change T-1005"}, headers=self.auth(WEB_TOKEN))
+            self.assertRegex(response.headers["X-Request-ID"], self.HEX16)
+            ids.append(response.headers["X-Request-ID"])
+        self.assertEqual(len(set(ids)), 2)
+        self.assertEqual(self.rows("SELECT request_id FROM ticket_events ORDER BY event_id"), [(i,) for i in ids])
+
+    async def test_the_id_is_in_a_header_and_not_in_the_body(self):
+        async with self.make_client(ScriptedModel(say("hi"))) as client:
+            response = await client.post("/chat", json={"message": "hi"}, headers=self.auth(WEB_TOKEN))
+        self.assertNotIn(response.headers["X-Request-ID"], response.text)
+
+    async def test_a_503_still_carries_the_id(self):
+        async with self.make_client(ScriptedModel(ModelUnavailable("ConnectionError"))) as client:
+            response = await client.post("/chat", json={"message": "hi"}, headers=self.auth(WEB_TOKEN))
+        self.assertEqual(response.status_code, 503)
+        self.assertRegex(response.headers["X-Request-ID"], self.HEX16)
+
+    async def test_a_client_cannot_choose_the_id(self):
+        model = ScriptedModel(tool_call("close_ticket", ticket_id="T-1005", reason="asked"), say("ok"))
+        async with self.make_client(model) as client:
+            response = await client.post("/chat", json={"message": "close T-1005"},
+                                         headers={**self.auth(WEB_TOKEN), "X-Request-ID": "deadbeefdeadbeef"})
+        self.assertNotEqual(response.headers["X-Request-ID"], "deadbeefdeadbeef")
+        self.assertEqual(self.rows("SELECT request_id FROM ticket_events"), [(response.headers["X-Request-ID"],)])
+
+    async def test_a_401_carries_no_id(self):
+        async with self.make_client(ScriptedModel()) as client:
+            response = await client.post("/chat", json={"message": "hi"})
+        self.assertNotIn("X-Request-ID", response.headers)
+
+
 class AuthenticationTests(ApiTestCase):
     async def test_no_or_bad_credentials_are_a_401_and_the_model_is_never_called(self):
         cases = {
@@ -177,6 +216,7 @@ class LoggingTests(ApiTestCase):
         joined = "\n".join(logs.output)
         self.assertIn("analyst-web", joined)
         self.assertIn("get_ticket:ok", joined)
+        self.assertIn("request=", joined)
         self.assertNotIn("private", joined)
 
 

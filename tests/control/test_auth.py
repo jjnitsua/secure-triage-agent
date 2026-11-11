@@ -79,6 +79,33 @@ class SignedPrincipalTests(unittest.TestCase):
             with self.subTest(payload=payload), self.assertRaisesRegex(AuthError, "malformed"):
                 verify_principal(package, now=T0)
 
+    def test_request_id_is_signed_and_comes_back(self):
+        tagged = Principal("analyst-web", "team-web", "analyst", request_id="0123456789abcdef")
+        verified = verify_principal(sign_principal(tagged, now=T0), now=T0 + 1)
+        self.assertEqual(verified.request_id, "0123456789abcdef")
+        self.assertEqual(verified, ANALYST)  # the request id is not part of who the caller is
+
+    def test_no_request_id_means_none(self):
+        self.assertIsNone(verify_principal(sign_principal(ANALYST, now=T0), now=T0 + 1).request_id)
+
+    def test_altered_request_id_is_rejected(self):
+        body, sig = sign_principal(Principal("analyst-web", "team-web", "analyst", request_id="aaaaaaaaaaaaaaaa"), now=T0).split(".")
+        payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        payload["request_id"] = "bbbbbbbbbbbbbbbb"
+        forged_body = _b64(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode())
+        with self.assertRaisesRegex(AuthError, "bad signature"):
+            verify_principal(f"{forged_body}.{sig}", now=T0 + 1)
+
+    def test_a_bad_request_id_is_refused_when_signing_and_when_verifying(self):
+        for bad in ("", "short", "UPPERCASE0123456", "not-hex-not-hex!!", "a" * 65, "abc def0 1234 5678"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                sign_principal(Principal("x", "t", "analyst", request_id=bad), now=T0)
+        for bad in ("", "short", 12345, ["0123456789abcdef"], "x" * 16):
+            payload = {"user_id": "x", "team": None, "role": "analyst", "request_id": bad, "exp": T0 + 60}
+            body = _b64(json.dumps(payload).encode())
+            with self.subTest(payload_value=bad), self.assertRaisesRegex(AuthError, "malformed"):
+                verify_principal(f"{body}.{auth._mac(body)}", now=T0)
+
     def test_missing_or_short_key_fails_closed(self):
         for value in ("", "too-short"):
             with mock.patch.dict("os.environ", {auth.KEY_ENV: value}):

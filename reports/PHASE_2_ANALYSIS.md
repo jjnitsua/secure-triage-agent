@@ -165,6 +165,6 @@ python scripts/parse_garak.py --markdown <report files>
 - Exercise the stop guard and abort paths of `scripts/run_garak_rest.py` (only the normal path was tested, on a 10-prompt run).
 - Find the cause of the Ollama 500 errors (check the model's context length against long agent loops).
 - Re-validate the stricter-count classifier on agent replies, especially the Resume rule.
-- Record a request or run identifier in the event log so outcomes can be tied to the prompt that caused them (Phase 3).
-- Make the `outcome=closed` log label for refused closes of already-closed tickets unambiguous.
+- ~~Record a request or run identifier in the event log so outcomes can be tied to the prompt that caused them (Phase 3).~~ Done at the start of Phase 3: every `/chat` call gets a request ID, signed into the principal and stored in `ticket_events.request_id`; the call returns it in the `X-Request-ID` header. The Phase 2 runs above predate it and still have no identifier.
+- ~~Make the `outcome=closed` log label for refused closes of already-closed tickets unambiguous.~~ Done at the start of Phase 3: a refused close now logs `outcome=already_closed`. The Phase 2 logs behind this document still carry the old label.
 - Repeat the groups in `mode: defended` after Phase 4 for the before/after comparison.

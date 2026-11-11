@@ -42,6 +42,15 @@ class StoreWriteTests(unittest.TestCase):
         with closing(sqlite3.connect(self.db)) as con:
             return con.execute(sql, params).fetchall()
 
+    def test_each_event_carries_the_request_id_it_was_given(self):
+        store.update_severity(self.db, "T-1005", "Low", "r", "u", request_id="aaaaaaaaaaaaaaaa")
+        store.close_ticket(self.db, "T-1005", "r", "u", request_id="bbbbbbbbbbbbbbbb")
+        store.draft_summary(self.db, ["T-1001"], "u", request_id="cccccccccccccccc")
+        store.draft_summary(self.db, ["T-1001"], "u")  # a caller with no request id leaves it empty
+        self.assertEqual(self.rows("SELECT action, request_id FROM ticket_events ORDER BY event_id"),
+                         [("update_severity", "aaaaaaaaaaaaaaaa"), ("close_ticket", "bbbbbbbbbbbbbbbb"),
+                          ("draft_summary", "cccccccccccccccc"), ("draft_summary", None)])
+
     def test_parallel_severity_updates_stay_consistent(self):
         # T-1001 starts Critical, version 1, one history row. 24 writes from 8 threads.
         with ThreadPoolExecutor(max_workers=8) as pool:

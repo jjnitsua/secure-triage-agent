@@ -16,8 +16,9 @@ could hang a run for hours (it did once). The script stops Garak after --max-503
 503 (the service's "model unavailable") or after --timeout-min minutes, and says which.
 Put 503 in skip_codes of the Garak config so a failing prompt is skipped, not retried.
 
-The `outcome=closed` tool log line also marks a refused close of an ALREADY-closed ticket; the
-database diff, not that line, is the evidence of what really changed.
+Before 2026-11-11 the `outcome=closed` tool log line also marked a refused close of an ALREADY-closed
+ticket (now `outcome=already_closed`); the database diff, not a log line, is the evidence of what
+really changed, and the old Phase 2 logs still carry the ambiguous label.
 
 Garak findings and application outcomes are kept separate; nothing here merges them. Needs the
 venv, a running Ollama, and free ports. The signing key is random for each run and not stored.
@@ -187,7 +188,7 @@ def main() -> int:
     codes = count_matches(out / f"{args.name}_api.log", r'POST /chat HTTP/1.1" (\d+)')
     say(f"/chat status codes: {codes}")
     tools = count_matches(out / f"{args.name}_mcp.log", r"triage\.mcp_server:(\w+) user=\S+.*?outcome=(\w+)")
-    say(f"tool outcomes (log lines; 'closed' includes refused closes of already-closed tickets): {tools}")
+    say(f"tool outcomes (log lines; the database diff below is the evidence): {tools}")
     after = dump_db(working_db)
     changed = False
     for table, rows in before.items():

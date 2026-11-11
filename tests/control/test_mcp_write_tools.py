@@ -157,6 +157,19 @@ class CloseTicketAuthzOn(WriteTestCase):
         self.assertEqual(self.ticket("T-1009"), ("Medium", "closed", 2))
         self.assertEqual(len(self.events()), 1)
 
+    async def test_a_real_close_and_a_refused_close_have_different_log_labels(self):
+        tagged = Principal("analyst-web", "team-web", "analyst", request_id="0123456789abcdef")
+        with self.assertLogs("triage.mcp_server", level="INFO") as logs:
+            await self.call("close_ticket", {"ticket_id": "T-1009", "reason": "first"}, tagged)
+            await self.call("close_ticket", {"ticket_id": "T-1009", "reason": "second"}, tagged)
+        first, second = logs.output
+        self.assertIn("outcome=closed", first)
+        self.assertIn("outcome=already_closed", second)
+        self.assertNotIn("outcome=closed", second)
+        for line in logs.output:
+            self.assertIn("request=0123456789abcdef", line)
+        self.assertEqual(self.rows("SELECT request_id FROM ticket_events"), [("0123456789abcdef",)])
+
     async def test_other_team_ticket_is_not_found_and_unchanged(self):
         result = await self.call("close_ticket", {"ticket_id": "T-2009", "reason": "x"}, WEB)
         self.assertTrue(result.is_error)

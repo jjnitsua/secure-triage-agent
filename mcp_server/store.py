@@ -104,12 +104,12 @@ def get_cve(db_path, cve_id: str) -> dict | None:
     return dict(row) if row else None
 
 
-def _record_event(con, actor, action, ticket_id, old_value, new_value, reason, version_after) -> None:
+def _record_event(con, actor, action, ticket_id, old_value, new_value, reason, version_after, request_id) -> None:
     con.execute(
-        "INSERT INTO ticket_events (ts, actor, action, ticket_id, old_value, new_value, reason, version_after) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ticket_events (ts, actor, action, ticket_id, old_value, new_value, reason, version_after, request_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-         actor, action, ticket_id, old_value, new_value, reason, version_after),
+         actor, action, ticket_id, old_value, new_value, reason, version_after, request_id),
     )
 
 
@@ -148,7 +148,7 @@ def _write(db_path, ticket_id, team_scope, change):
         return changed, _read_ticket(con, ticket_id)
 
 
-def update_severity(db_path, ticket_id, level, reason, actor, team_scope=None):
+def update_severity(db_path, ticket_id, level, reason, actor, team_scope=None, request_id=None):
     """Set the ticket's severity. Returns (changed, ticket); changed is False if it already had that level.
 
     team_scope None means every team; a team name restricts the write to that team's tickets.
@@ -164,13 +164,13 @@ def update_severity(db_path, ticket_id, level, reason, actor, team_scope=None):
         seq = con.execute(
             "SELECT MAX(seq) FROM ticket_severity_history WHERE ticket_id = ?", (ticket_id,)).fetchone()[0] + 1
         con.execute("INSERT INTO ticket_severity_history VALUES (?, ?, ?)", (ticket_id, seq, level))
-        _record_event(con, actor, "update_severity", ticket_id, row["severity"], level, reason, row["version"] + 1)
+        _record_event(con, actor, "update_severity", ticket_id, row["severity"], level, reason, row["version"] + 1, request_id)
         return True
 
     return _write(db_path, ticket_id, team_scope, change)
 
 
-def close_ticket(db_path, ticket_id, reason, actor, team_scope=None):
+def close_ticket(db_path, ticket_id, reason, actor, team_scope=None, request_id=None):
     """Close the ticket. Returns (True, ticket). A ticket that is already closed raises TicketClosed."""
     def change(con, row):
         cur = con.execute(
@@ -178,13 +178,13 @@ def close_ticket(db_path, ticket_id, reason, actor, team_scope=None):
             (ticket_id, row["version"]))
         if cur.rowcount != 1:
             raise TicketConflict(ticket_id)
-        _record_event(con, actor, "close_ticket", ticket_id, row["status"], "closed", reason, row["version"] + 1)
+        _record_event(con, actor, "close_ticket", ticket_id, row["status"], "closed", reason, row["version"] + 1, request_id)
         return True
 
     return _write(db_path, ticket_id, team_scope, change)
 
 
-def draft_summary(db_path, ticket_ids, actor, team_scope=None) -> list[dict]:
+def draft_summary(db_path, ticket_ids, actor, team_scope=None, request_id=None) -> list[dict]:
     """Return the summary fields of every requested ticket and record a draft_summary event.
 
     All or nothing: if any ID does not exist (TicketNotFound) or is outside the team scope
@@ -202,5 +202,5 @@ def draft_summary(db_path, ticket_ids, actor, team_scope=None) -> list[dict]:
             if team_scope is not None and row["team"] != team_scope:
                 raise TicketForbidden(ticket_id)
             rows.append(dict(row))
-        _record_event(con, actor, "draft_summary", None, None, json.dumps(list(ticket_ids)), None, None)
+        _record_event(con, actor, "draft_summary", None, None, json.dumps(list(ticket_ids)), None, None, request_id)
         return rows

@@ -146,7 +146,7 @@ curl -s -X POST http://127.0.0.1:8001/chat \
   -d '{"message": "Show me ticket T-1005."}'
 ```
 
-To run the vulnerable baseline, start the tool server with `TRIAGE_CONFIG=config/vulnerable.yaml` set. The control tests need no model: run each file, for example `python tests/control/test_config.py -v` (166 tests across 13 files at the end of Phase 2). Do not reset the database while the service is running.
+To run the vulnerable baseline, start the tool server with `TRIAGE_CONFIG=config/vulnerable.yaml` set. The control tests need no model: run each file, for example `python tests/control/test_config.py -v` (166 tests across 13 files at the end of Phase 2; 177 after the request ID was added at the start of Phase 3). Do not reset the database while the service is running.
 
 ### Run Garak against the service
 

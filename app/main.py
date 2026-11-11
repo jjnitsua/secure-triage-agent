@@ -16,16 +16,23 @@ identity then goes to the tool server only as a signed value in `_meta` (app/age
 The model and the tool server are passed in, so tests can use a scripted model and an
 in-process tool server. The generated API docs (/docs, /redoc, /openapi.json) are switched
 off. Logs hold the user, the tools used and the outcome, never the message text.
+
+Request ID: every /chat call gets a random ID (16 hex characters). It travels inside the signed
+principal to the tool server, which records it with every ticket event, and it comes back in the
+X-Request-ID response header (also on a 503), so a test can tie each recorded change to the
+request that caused it. The ID carries no meaning and is not a credential.
 """
+import dataclasses
 import logging
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Annotated, Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import Depends, FastAPI, HTTPException  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException, Response  # noqa: E402
 from fastapi import Path as PathParam  # noqa: E402
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer  # noqa: E402
 from pydantic import BaseModel, ConfigDict, StringConstraints  # noqa: E402
@@ -37,6 +44,7 @@ from app.auth import Principal, TokenDirectory, load_users  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 PROMPT_ENV = "TRIAGE_SYSTEM_PROMPT"
 MAX_MESSAGE_CHARS = 4000
+REQUEST_ID_HEADER = "X-Request-ID"
 
 log = logging.getLogger("triage.api")
 
@@ -77,16 +85,21 @@ def create_app(model: ModelClient, gateway: McpToolGateway, users: TokenDirector
         return principal
 
     @app.post("/chat", response_model=ChatOut)
-    async def chat(body: ChatIn, principal: Annotated[Principal, Depends(current_principal)]) -> ChatOut:
+    async def chat(body: ChatIn, response: Response,
+                   principal: Annotated[Principal, Depends(current_principal)]) -> ChatOut:
+        request_id = secrets.token_hex(8)
+        principal = dataclasses.replace(principal, request_id=request_id)
+        headers = {REQUEST_ID_HEADER: request_id}
         try:
             result = await run_agent(model, gateway, principal, body.message, system_prompt)
         except ModelUnavailable:
-            log.warning("chat user=%s outcome=model_unavailable", principal.user_id)
-            raise HTTPException(status_code=503, detail="The language model is unavailable") from None
+            log.warning("chat user=%s request=%s outcome=model_unavailable", principal.user_id, request_id)
+            raise HTTPException(status_code=503, detail="The language model is unavailable", headers=headers) from None
         except ToolServerUnavailable:
-            log.warning("chat user=%s outcome=tool_server_unavailable", principal.user_id)
-            raise HTTPException(status_code=503, detail="The tool server is unavailable") from None
-        log.info("chat user=%s tools=%s stopped_early=%s", principal.user_id,
+            log.warning("chat user=%s request=%s outcome=tool_server_unavailable", principal.user_id, request_id)
+            raise HTTPException(status_code=503, detail="The tool server is unavailable", headers=headers) from None
+        response.headers[REQUEST_ID_HEADER] = request_id
+        log.info("chat user=%s request=%s tools=%s stopped_early=%s", principal.user_id, request_id,
                  [f"{r.name}:{'ok' if r.ok else 'error'}" for r in result.tool_calls], result.stopped_early)
         return ChatOut(reply=result.reply, stopped_early=result.stopped_early,
                        tool_calls=[ToolCallOut(name=r.name, arguments=r.arguments, ok=r.ok)

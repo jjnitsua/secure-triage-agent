@@ -76,7 +76,8 @@ CREATE TABLE ticket_events (
     old_value     TEXT,
     new_value     TEXT,            -- for draft_summary: JSON list of ticket IDs
     reason        TEXT,
-    version_after INTEGER
+    version_after INTEGER,
+    request_id    TEXT             -- the /chat call that caused it (from the signed principal); NULL if none
 );
 
 -- History and events can only grow: any UPDATE or DELETE is refused by the database.

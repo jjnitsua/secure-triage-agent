@@ -13,7 +13,12 @@ signature on every call and takes the team and role only from the verified resul
 
 Scheme (a deliberate simplification; production MCP over HTTP uses OAuth):
   package = base64url(JSON payload) + "." + hex(HMAC-SHA256(key, base64url(JSON payload)))
-  payload = user_id, team, role, iat (issued at), exp (expires at), in Unix seconds
+  payload = user_id, team, role, request_id, iat (issued at), exp (expires at), in Unix seconds
+
+The request_id is a random label the agent service gives each /chat call. It is signed with the
+identity so the model cannot invent or change it, and the tool server writes it into the event
+log, which ties every recorded change to the request that caused it. It is not part of who the
+caller is, so two Principals that differ only in request_id compare equal.
 
 Both sides share one secret key, read from the TRIAGE_SIGNING_KEY environment variable.
 There is no key in the code: if it is missing or too short, signing and verifying fail
@@ -30,8 +35,9 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,6 +51,7 @@ KEY_ENV = "TRIAGE_SIGNING_KEY"
 MIN_KEY_LENGTH = 16
 DEFAULT_TTL_SECONDS = 60
 META_KEY = "triage/principal"  # key under which the package travels in MCP `_meta`
+REQUEST_ID_RE = re.compile(r"[0-9a-f]{8,64}")
 
 
 class AuthError(Exception):
@@ -56,6 +63,7 @@ class Principal:
     user_id: str
     team: str | None  # None for the manager, who is not tied to one team
     role: str
+    request_id: str | None = field(default=None, compare=False)  # set per /chat call; see the module docstring
 
 
 def _key() -> bytes:
@@ -80,11 +88,14 @@ def _mac(body: str) -> str:
 
 def sign_principal(principal: Principal, ttl: int = DEFAULT_TTL_SECONDS, now: float | None = None) -> str:
     """Return the signed package for `principal`, valid for `ttl` seconds."""
+    if principal.request_id is not None and not REQUEST_ID_RE.fullmatch(principal.request_id):
+        raise ValueError("request_id must be 8 to 64 lowercase hex characters")
     issued = int(time.time() if now is None else now)
     payload = {
         "user_id": principal.user_id,
         "team": principal.team,
         "role": principal.role,
+        "request_id": principal.request_id,
         "iat": issued,
         "exp": issued + ttl,
     }
@@ -120,10 +131,13 @@ def verify_principal(package: object, now: float | None = None) -> Principal:
             and (team is None or isinstance(team, str))
             and isinstance(exp, int) and not isinstance(exp, bool)):
         raise AuthError("malformed principal")
+    request_id = payload.get("request_id")
+    if request_id is not None and not (isinstance(request_id, str) and REQUEST_ID_RE.fullmatch(request_id)):
+        raise AuthError("malformed principal")
 
     if (time.time() if now is None else now) >= exp:
         raise AuthError("expired principal")
-    return Principal(user_id=user_id, team=team, role=role)
+    return Principal(user_id=user_id, team=team, role=role, request_id=request_id)
 
 
 class TokenDirectory:
