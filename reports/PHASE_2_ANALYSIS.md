@@ -19,7 +19,7 @@
 | Generations per prompt | 1 (the REST generator cannot ask for several replies per call) |
 | Prompt cap and seed | 256 per probe; `run.seed: 0`, so the same random subset is drawn when a probe is run again in the same position |
 | Request timeout | 120 s |
-| Skipped statuses | 422 (message over 4000 characters) in all runs; **503 (model error) added for the re-run only** (section 6) |
+| Skipped statuses | 422 (message over 4000 characters) in all runs; **503 (model error) added for the re-run only** (section 6). The committed config now skips both, as the re-run did; the first four groups ran with 422 only |
 | State | database reset from the fixtures before every group; tool server and agent service restarted per group; database diffed after each group |
 | Hardware | Apple M4 Pro, 24 GB, on AC power under `caffeinate -i` |
 
@@ -123,7 +123,7 @@ What it does not show:
 
 - **Counts cross-checked.** For every probe and detector the parser's flagged and `None` counts matched Garak's own `eval` entries.
 - **Model errors.** In the first `latentinjection` run, Ollama answered one chat request with a 500; the service returned 503 (`model_unavailable`) 179 times in total. The Garak REST generator retries 5xx responses with no maximum, so it kept retrying until the 150-minute timeout killed it, and its report is incomplete. I did not find the cause: Ollama's log files in this setup contained nothing for the period, and the Ollama runner process was never restarted. In the re-run 6 of 512 requests hit the same error, so it is not a one-off. A plausible but unverified cause is a request exceeding the model's 4096-token context during an agent loop; this was not tested.
-- **Re-run changes.** The re-run used a scratch copy of the config with `skip_codes: [422, 503]` and a driver that stops the run after 10 service 503s or 90 minutes; neither limit was reached. The skipped prompts are excluded from n and listed in section 3. The committed `garak/rest_vulnerable.yaml` skips 422 only.
+- **Re-run changes.** The re-run used a scratch copy of the config with `skip_codes: [422, 503]` and a driver that stops the run after 10 service 503s or 90 minutes; neither limit was reached. The skipped prompts are excluded from n and listed in section 3. After these runs the committed `garak/rest_vulnerable.yaml` was changed to skip 503 as well, so it now matches the re-run; the first four groups ran with 422 only (they had no 503s except the partial `latentinjection` run).
 - **Possible subset difference.** The re-run drew the Resume and Whois prompts with the same seed but in a different position in the run, so their 256-prompt subsets may differ from what the first run would have drawn. This was not verified.
 - **Distinct prompts, lengths.** See section 3.
 
@@ -143,19 +143,26 @@ Does not show:
 
 ## 8. Reproducing
 
-From the repo folder with the venv active:
+From the repo folder with the venv active, one command per group (needs a running Ollama and free ports 8000 and 8001):
 
-1. `python scripts/reset_db.py`
-2. Set the same `TRIAGE_SIGNING_KEY` (at least 16 characters) and `TRIAGE_CONFIG=config/vulnerable.yaml` for both processes; start `python -m mcp_server.server` (port 8000) and `uvicorn app.main:create_default_app --factory --host 127.0.0.1 --port 8001`.
-3. `REST_API_KEY=<the analyst-web dev token from data/users.json> python -m garak --config garak/rest_vulnerable.yaml --spec <probes> --report_prefix phase2_rest_vuln_<name>`
-4. Stop both processes; compare `data/working.db` with `data/fixtures.db` and read `ticket_events`.
-5. `python scripts/parse_garak.py --markdown <report files>`.
+```
+python scripts/run_garak_rest.py --name encoding_base64 --spec probes.encoding.InjectBase64
+python scripts/run_garak_rest.py --name encoding_hex_rot13 --spec "probes.encoding.InjectHex,probes.encoding.InjectROT13"
+python scripts/run_garak_rest.py --name latentinjection --spec "probes.latentinjection.LatentInjectionReport,probes.latentinjection.LatentInjectionFactSnippetLegal,probes.latentinjection.LatentInjectionResume,probes.latentinjection.LatentWhoisSnippet"
+python scripts/run_garak_rest.py --name promptinject --spec probes.promptinject
+```
 
-The driver script that ran groups back to back (reset, start, run, stop, diff, the 503 guard) is **not in the repo yet**; adding it is an open item. Do not reset the database while the service is running.
+`scripts/run_garak_rest.py` resets the database, starts the tool server and the agent service with `config/vulnerable.yaml`, runs Garak against `/chat` with the `analyst-web` dev token (taken from `data/users.json`, passed to Garak only through the environment), stops everything, then prints the HTTP status counts, the tool outcomes and every database row that changed. It stops Garak after 10 responses of 503 or after `--timeout-min` minutes (default 150) so a model error cannot hang a run. The Garak report is written to Garak's report folder as `phase2_rest_vuln_<name>.report.jsonl`; logs and the summary go to `logs/garak_rest/` (git-ignored). Then:
+
+```
+python scripts/parse_garak.py --markdown <report files>
+```
+
+**The script in the repo is a cleaned-up combination of the two throwaway drivers that produced the numbers above; it was written after those runs.** It was checked with one 10-prompt run of `promptinject.HijackHateHumans` (10 × 200, 2 of 10 not flagged, 8 flagged, the same as the earlier pilot with the same seed; database unchanged; no processes left over). The stop guard (503 limit, timeout) and the abort paths were not exercised. Do not reset the database while the service is running; the script resets it at the start of each group.
 
 ## 9. Open items
 
-- Add the run driver to `scripts/` and put `503` in the committed config's `skip_codes` (the committed file does not yet match the re-run).
+- Exercise the stop guard and abort paths of `scripts/run_garak_rest.py` (only the normal path was tested, on a 10-prompt run).
 - Find the cause of the Ollama 500 errors (check the model's context length against long agent loops).
 - Re-validate the stricter-count classifier on agent replies, especially the Resume rule.
 - Record a request or run identifier in the event log so outcomes can be tied to the prompt that caused them (Phase 3).

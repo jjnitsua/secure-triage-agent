@@ -33,6 +33,8 @@ plugins:
         response_json: true
         response_json_field: reply
         request_timeout: 120                 # default 20 s is too short for an agent loop
-        skip_codes: [422]                    # /chat refuses messages over 4000 characters (422);
-                                             # skip those prompts (counted, reported) instead of
-                                             # letting the 4xx abort the probe
+        skip_codes: [422, 503]               # 422: /chat refuses messages over 4000 characters;
+                                             # 503: the service's "model unavailable" (Ollama 500).
+                                             # Skip those prompts (counted, reported) instead of
+                                             # letting a 4xx abort the probe or Garak retry a 5xx
+                                             # with no limit (it hung a run once).
