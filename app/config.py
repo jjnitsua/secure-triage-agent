@@ -16,6 +16,13 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_ENV = "TRIAGE_CONFIG"
 
+# `mode` is a shortcut that sets the defaults for the switches below; an explicit switch
+# in the file overrides it. Only the switches that exist so far appear here.
+MODES = {
+    "defended": {"tool_authz": True, "approval_policy": "none"},    # approvals arrive in Phase 4
+    "vulnerable": {"tool_authz": False, "approval_policy": "none"},  # the model alone decides
+}
+
 KNOWN_KEYS = {
     "auth": {"token_auth"},
     "controls": {"tool_authz", "approval_policy"},
@@ -24,6 +31,7 @@ KNOWN_KEYS = {
 
 @dataclass(frozen=True)
 class Config:
+    mode: str = "defended"  # "custom" when an explicit switch contradicts the named mode
     token_auth: bool = True
     tool_authz: bool = True
     approval_policy: str = "none"
@@ -51,9 +59,14 @@ def load_config(path=None) -> Config:
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
         raise ValueError("config must be a mapping")
-    unknown = set(raw) - set(KNOWN_KEYS)
+    unknown = set(raw) - set(KNOWN_KEYS) - {"mode"}
     if unknown:
         raise ValueError(f"unknown top-level key(s): {sorted(unknown)}")
+
+    mode = raw.get("mode", "defended")
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {sorted(MODES)}, got {mode!r}")
+    defaults = MODES[mode]
 
     auth = _section(raw, "auth")
     controls = _section(raw, "controls")
@@ -61,8 +74,11 @@ def load_config(path=None) -> Config:
     token_auth = _bool(auth, "token_auth", True)
     if not token_auth:
         raise ValueError("token_auth: false is for the identity experiment and is not implemented yet")
-    approval_policy = controls.get("approval_policy", "none")
+    approval_policy = controls.get("approval_policy", defaults["approval_policy"])
     if approval_policy != "none":
         raise ValueError(f"approval_policy {approval_policy!r} is not implemented yet (only 'none')")
-    return Config(token_auth=token_auth, tool_authz=_bool(controls, "tool_authz", True),
+    tool_authz = _bool(controls, "tool_authz", defaults["tool_authz"])
+    if (tool_authz, approval_policy) != (defaults["tool_authz"], defaults["approval_policy"]):
+        mode = "custom"  # a mixed configuration must not be reported as a named mode
+    return Config(mode=mode, token_auth=token_auth, tool_authz=tool_authz,
                   approval_policy=approval_policy)

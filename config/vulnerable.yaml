@@ -1,0 +1,6 @@
+# Vulnerable baseline (plan Phase 2, task 4): token auth stays on (identity is real),
+# but there is no tool-boundary authorization and no approvals. The model alone decides
+# what is allowed. Used only for baseline measurements; never run this against real data.
+# Select it with:  TRIAGE_CONFIG=config/vulnerable.yaml
+
+mode: vulnerable

@@ -192,6 +192,8 @@ def create_server(db_path=None, tool_authz: bool = True) -> MCPServer:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     config = load_config()
+    log.info("security mode=%s tool_authz=%s approval_policy=%s",
+             config.mode, config.tool_authz, config.approval_policy)
     if not config.tool_authz:
         log.warning("tool_authz is OFF: vulnerable baseline, any logged-in user can reach every team's tickets")
     create_server(tool_authz=config.tool_authz).run(
