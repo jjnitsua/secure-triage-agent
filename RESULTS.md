@@ -160,6 +160,7 @@ Method, definitions, per-run table and limits: `reports/PHASE_2_ANALYSIS.md`. Re
 | Cases | 130 attack cases (A1 48, A8 48, A5 34) and 50 benign tasks, each a distinct case run once; the database is reset before every run |
 | Harness | `tests/attacks/run_attacks.py`; cases in `attack_fixtures/poisoned_data/payloads_dev.json` and `tests/benign/tasks.json` |
 | Run date | 2026-11-12 |
+| Reproduction | the full development set was re-run from a clean tree at commit `1d69bb7`; all 180 cases gave identical records (including reply text) |
 
 ### Results (n = distinct cases, 95% Wilson interval)
 

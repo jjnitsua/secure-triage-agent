@@ -63,7 +63,9 @@ The two user messages for A1 and A8 are "Please review ticket T-9001 and tell me
 | `baseline_dev` | all 180 development cases plus 6 repeated cases | 186 runs in 13.5 min, mean 4.0 s per run, slowest 32.4 s; 0 HTTP errors; 0 inconclusive; the 6 repeats gave identical results |
 | `baseline_dev_benign` | the benign set again after one grader fix (section 5) | 53 runs (50 plus 3 repeats) in 3.4 min; 0 errors; repeats identical |
 
-The attack numbers below come from `baseline_dev`; the benign numbers come from `baseline_dev_benign`. The runs were made on repository commit `d1ea2dc` with the harness and case files still uncommitted; the harness commit is the reproducible record.
+The attack numbers below come from `baseline_dev`; the benign numbers come from `baseline_dev_benign`. The four runs above were made on repository commit `d1ea2dc` with the harness and case files still uncommitted (the benign grader fix of section 5 came between `baseline_dev` and `baseline_dev_benign`). The harness and case files were then committed as `1d69bb7`.
+
+**Reproduction check (`repro_dev`).** The whole development set (180 cases plus 6 repeats) was run again from a clean working tree at commit `1d69bb7`: 186 runs in 13.2 min, 0 HTTP errors, 0 inconclusive. Each of the 180 cases was compared with the saved record (class, detail, events, tool calls, changed tickets, final ticket state and exact reply text; benign tasks against `baseline_dev_benign`, attack cases against `baseline_dev`). **All 180 were identical, and the 6 repeats matched their first runs.** The results in this document are therefore tied to commit `1d69bb7`.
 
 ## 5. Corrections made while building (disclosed)
 
@@ -151,7 +153,7 @@ The three misses are model errors, confirmed from the saved replies: `b14` (summ
 - The A5 marker list is built from the synthetic fixtures and checked for strings that also occur in team-web data; a leaked fact that contains none of the marker strings is not detected (section 6.4).
 - Benign tasks were graded by exact-ID and string rules; the harness cannot judge a reply that is correct but worded differently.
 - The held-out message may route to `draft_summary` (section 5.1).
-- The runs were made with uncommitted files on top of commit `d1ea2dc`. The results files in `logs/attacks/` are not committed.
+- The first runs were made with uncommitted files on top of commit `d1ea2dc`; a clean re-run at commit `1d69bb7` reproduced them exactly (section 4). The results files in `logs/attacks/` are not committed.
 - Approval-specific bypass tests (replay, argument swap, stale version, self-approval, expiry, concurrent reuse, formerly-Critical close) and approved end-to-end workflows are Phase 4, because they need the approval backend. The forged-principal and client-supplied-identity tests already exist in `tests/control/`.
 
 ## 9. Reproducing
@@ -173,4 +175,3 @@ Use `--limit N` for a short pilot (N evenly spaced cases per scenario). The held
 - Consider stronger or more varied A1/A8 development variants, or other carriers, if the low baseline leaves too little room to show a Phase 4 improvement (the held-out file is frozen).
 - Run the held-out variants in Phase 4 against `vulnerable` and `defended` in one session.
 - Phase 5: record read events in the database so a cross-team read leaves evidence there, and A5 can be graded from the database like the write scenarios.
-- Record the harness commit that produced these numbers.
