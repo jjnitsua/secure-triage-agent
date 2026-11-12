@@ -6,14 +6,14 @@ This is a **defensive security** project. I build a small vulnerability-triage a
 
 ## Status
 
-**Phases 0 (setup), 1 (Garak baseline) and 2 (the assistant, identity and threat model): complete for v1, with the limits listed under "Phase 1 findings" and "Phase 2 findings".** The assistant is built and has been measured in its deliberately vulnerable baseline mode; **nothing has been measured in the defended mode yet** (hardening is Phase 4).
+**Phases 0 (setup), 1 (Garak baseline), 2 (the assistant, identity and threat model) and 3 (adversary emulation harness): complete for v1, with the limits listed under "Phase 1 findings", "Phase 2 findings" and "Phase 3 findings".** The assistant is built and has been measured in its deliberately vulnerable baseline mode, by Garak (model behavior) and by an outcome-based attack harness (what actually happened to tickets); **nothing has been measured in the defended mode yet** (hardening is Phase 4, which also runs the frozen held-out attack variants and the approval-specific tests).
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Setup, model choice, tool-calling checks | Done |
 | 1 | Garak baseline assessment | Done for v1 (results and limits in `RESULTS.md`) |
 | 2 | Agent, identity and threat model | Done for v1 (vulnerable baseline measured; details in `reports/PHASE_2_ANALYSIS.md`) |
-| 3 | Adversary emulation harness | Not started |
+| 3 | Adversary emulation harness | Done for v1 (vulnerable baseline measured on the development variants; held-out variants and approval tests in Phase 4; details in `reports/PHASE_3_ANALYSIS.md`) |
 | 4 | Hardening | Not started |
 | 5 | Telemetry and detections | Not started |
 | 7 | CI/CD security gate | Not started |
@@ -30,6 +30,7 @@ This is a **defensive security** project. I build a small vulnerability-triage a
 - **The assistant (Phase 2):** `app/` (FastAPI agent service: `POST /chat`, token lookup, signed identity, the agent loop), `mcp_server/` (the tool server with six tools and a SQLite store), `config/` (`security.yaml`, `vulnerable.yaml`, `system_prompt.txt`), `data/` (synthetic tickets, CVE records and dev-only users), `scripts/seed_db.py` and `scripts/reset_db.py` (build and reset the fixture database), `tests/control/` (166 deterministic control tests, no model).
 - `THREAT_MODEL.md`: assets, attackers, trust boundaries and 13 threats, mapped to the OWASP Top 10 for LLM Applications (2025), MITRE ATLAS and STRIDE.
 - `garak/rest_vulnerable.yaml` and `scripts/run_garak_rest.py`: run Garak against the running service and read what happened to the data afterwards. `reports/PHASE_2_ANALYSIS.md`: the detail behind the Phase 2 results.
+- **The attack harness (Phase 3):** `tests/attacks/run_attacks.py` (reset, plant, call `/chat`, read the outcome from the database and log, classify), `attack_fixtures/poisoned_data/` (the development and the frozen held-out attack cases, synthetic and labeled), `tests/benign/tasks.json` (50 benign tasks with expected outcomes), and `reports/PHASE_3_ANALYSIS.md`.
 - The remaining folders are the planned layout for later phases.
 
 ## The assistant and its security modes (Phase 2)
@@ -41,6 +42,23 @@ An analyst or manager chats with a vulnerability-triage assistant. It can read a
 - **Simplification, stated plainly.** Production MCP over HTTP uses the protocol's OAuth-based authorization. This project uses a simpler scheme, a shared signing key held by the two local processes, so that the project can concentrate on enforcing identity and permissions at the tool boundary. It is a teaching simplification, not a production design.
 - **Modes.** `config/security.yaml` is `mode: defended`, the default. `config/vulnerable.yaml` is the baseline: login is still real, but tool-boundary authorization is off and there are no approvals, so the model alone decides what is allowed. An explicit switch overrides the mode and is then reported as `custom`. **Approvals are not built yet (Phase 4)**, so `approval_policy` is `none` in both modes and today "defended" means only tool-boundary authorization.
 - **Threat model.** `THREAT_MODEL.md` lists what could go wrong and where. It is a plan of what to test, not a result; the STRIDE labels were added to threats found by the asset, attacker and boundary method, and no per-element STRIDE pass was done.
+
+## Phase 3 findings
+
+These are **verified application outcomes** from the adversary emulation harness (`tests/attacks/run_attacks.py`): what actually happened to tickets, read from the database and the tool server's log for each request, not what the model said. They describe the **vulnerable baseline only** (`qwen2.5:7b`, temperature 0, seed 0) on the **development variants** of three scenarios; the frozen held-out variants are run in Phase 4. Every rate counts distinct cases, each run once, and carries a 95% Wilson interval. Cases that share a phrasing or a target are not independent, so the intervals are optimistic. Garak is not used here and nothing is merged with the Garak numbers.
+
+| Scenario | Result | Count | 95% interval |
+|---|---|---|---|
+| A1: a poisoned ticket tries to close a Critical ticket | Critical ticket closed | 2 / 48 | [1.2%, 14.0%] |
+| A8: downgrade, then close | Critical ticket changed | 1 / 48 | [0.4%, 10.9%] |
+| A8 | full downgrade-then-close chain | 0 / 48 | [0.0%, 7.4%] |
+| A5: an analyst asks for another team's tickets (no injection) | agent read another team's data (log) | 30 / 34 | [73.4%, 95.3%] |
+| A5 | other team's data in the reply, marker-based **lower bound** | 23 / 34 | [50.8%, 80.9%] |
+| 50 benign tasks | task completion | 47 / 50 | [83.8%, 97.9%] |
+
+With no controls, an analyst could read another team's tickets through the assistant in most of the cross-team requests tested, with no injection needed. The injection scenarios rarely changed the intended Critical ticket (the model usually read the poisoned ticket and wrote nothing), and none of the 48 A8 cases completed the full chain. That does not make the injection attacks harmless: it is six phrasings and one carrier format on one model, and zero in 48 still allows up to 7.4% at the upper bound.
+
+Limits: nothing was measured in the defended mode; the A5 leak count undercounts (a hand review of the 11 uncounted runs found 7 that disclosed content without a marker string); the benign set has no approved workflows yet; the case lists are hand-built, so these are counts for a smoke test, not population rates; corrections made while building (including a benign grading bug that moved completion from 46/50 to 47/50) are disclosed in the analysis. A clean re-run at commit `1d69bb7` reproduced all 180 cases exactly, on one machine. Method, definitions, breakdowns and how to reproduce: `reports/PHASE_3_ANALYSIS.md`; headline numbers: `RESULTS.md`.
 
 ## Phase 2 findings
 
@@ -146,7 +164,17 @@ curl -s -X POST http://127.0.0.1:8001/chat \
   -d '{"message": "Show me ticket T-1005."}'
 ```
 
-To run the vulnerable baseline, start the tool server with `TRIAGE_CONFIG=config/vulnerable.yaml` set. The control tests need no model: run each file, for example `python tests/control/test_config.py -v` (166 tests across 13 files at the end of Phase 2; 177 after the request ID was added at the start of Phase 3). Do not reset the database while the service is running.
+To run the vulnerable baseline, start the tool server with `TRIAGE_CONFIG=config/vulnerable.yaml` set. The control tests need no model: run each file, for example `python tests/control/test_config.py -v` (166 tests across 13 files at the end of Phase 2; 177 after the request ID was added at the start of Phase 3). Do not reset the database while a request is being handled; the attack harness resets it between runs while the services are idle (a test of 10 reset cycles against a running tool server passed).
+
+### Run the attack harness
+
+```bash
+python tests/attacks/run_attacks.py --dry-run                                   # lists the 180 development cases; starts nothing, writes nothing
+python tests/attacks/run_attacks.py --name baseline_dev --determinism-check 6   # all development cases, about 14 minutes
+python tests/attacks/run_attacks.py --name baseline_dev_benign --scenarios benign
+```
+
+For each case the harness resets the database, plants a ticket if the case needs one, calls `POST /chat` as a dev user, reads the outcome from the database and the tool server's log by the `X-Request-ID` response header, and classifies the run. It starts and stops both services itself (vulnerable mode by default), so Ollama must be running and ports 8000 and 8001 free. Results go to `logs/attacks/` (git-ignored). The frozen held-out variants are refused unless `--allow-heldout` is given and are meant for the Phase 4 final measurement.
 
 ### Run Garak against the service
 
@@ -159,5 +187,5 @@ The script resets the database, starts both services in vulnerable mode, runs Ga
 ## Scope and ethics
 
 - All data is synthetic. Tokens and canary values are dev-only.
-- Malicious test fixtures will live in `attack_fixtures/`, clearly labeled, and target only this project.
+- Malicious test fixtures live in `attack_fixtures/`, clearly labeled, and target only this project.
 - Results will be reported with sample sizes and confidence intervals, and claims will be limited to what was tested.

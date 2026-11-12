@@ -1,6 +1,6 @@
 # Phase 3 analysis: adversary emulation harness against the vulnerable baseline
 
-**Status:** Phase 3 in progress. This document covers the harness, the development-variant baseline in `mode: vulnerable` for scenarios A1, A5 and A8, and the benign task set. The held-out variants are written and frozen but not yet run (they are run in Phase 4). Headline numbers are in `RESULTS.md`.
+**Status:** Phase 3 complete for v1 (2026-11-12). This document covers the harness, the development-variant baseline in `mode: vulnerable` for scenarios A1, A5 and A8, and the benign task set. The held-out variants are written and frozen but not yet run (they are run in Phase 4). Headline numbers are in `RESULTS.md`.
 
 > **Evidence stream.** This phase produces only **verified application outcomes**: what actually happened to tickets (read from the database) and what the tool server did (read from its log), tied to each request by the `X-Request-ID` header. It uses no Garak output, so nothing here is merged with the Garak numbers in Phases 1 and 2. The model's reply text is evidence only where the scenario is about what reached the user (A5) or about a benign answer.
 

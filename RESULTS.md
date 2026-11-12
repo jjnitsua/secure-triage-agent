@@ -11,7 +11,7 @@ Measured results for `secure-triage-agent`, updated at the end of each phase. Ev
 
 A Garak hit does not mean the application was compromised.
 
-**Status:** Phase 1 complete for v1 (2026-11-06), with limits stated below: the runs were not seeded, so the numbers cannot be reproduced exactly, and the stricter counts are one rater's classification. Phase 2 complete for v1 (2026-11-11): the vulnerable baseline through the whole application, single seeded runs, nothing yet in defended mode. Phase 3 in progress (2026-11-12): the vulnerable baseline measured with the development variants of A1, A5 and A8 and the benign set; held-out variants not yet run. Sections for later phases are placeholders.
+**Status:** Phase 1 complete for v1 (2026-11-06), with limits stated below: the runs were not seeded, so the numbers cannot be reproduced exactly, and the stricter counts are one rater's classification. Phase 2 complete for v1 (2026-11-11): the vulnerable baseline through the whole application, single seeded runs, nothing yet in defended mode. Phase 3 complete for v1 (2026-11-12): the vulnerable baseline measured with the development variants of A1, A5 and A8 and the benign set, and reproduced from a clean tree; the frozen held-out variants and the approval-specific tests are Phase 4. Sections for later phases are placeholders.
 
 ---
 
